@@ -1,0 +1,43 @@
+[project]
+name = "automated_research_report_generator_v0.1"
+version = "0.1.0"
+description = "automated_research_report_generator_v0.1 using crewAI"
+authors = [
+    { name = "Your Name", email = "you@example.com" },
+]
+requires-python = ">=3.10,<3.14"
+dependencies = [
+    "beautifulsoup4>=4.13.5",
+    "crewai[file-processing,google-genai,litellm,tools]>=1.12.2",
+    "pydantic>=2.11.10",
+    "PyMuPDF>=1.26.7",
+    "python-dotenv>=1.1.1",
+    "PyYAML>=6.0.3",
+    "markdown>=3.10.2",
+    "weasyprint>=68.1",
+]
+
+[project.scripts]
+automated_research_report_generator_v0_1 = "automated_research_report_generator_v0_1.main:run"
+run_crew = "automated_research_report_generator_v0_1.main:run"
+train = "automated_research_report_generator_v0_1.main:train"
+replay = "automated_research_report_generator_v0_1.main:replay"
+test = "automated_research_report_generator_v0_1.main:test"
+run_with_trigger = "automated_research_report_generator_v0_1.main:run_with_trigger"
+
+[build-system]
+requires = [
+    "hatchling",
+]
+build-backend = "hatchling.build"
+
+[tool.crewai]
+type = "crew"
+
+[tool.uv]
+override-dependencies = [
+    "litellm<=1.82.6",
+]
+required-environments = [
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",
+]

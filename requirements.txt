@@ -1,0 +1,13 @@
+# Pinned from the current project environment and uv.lock.
+# Install with: pip install -r requirements.txt
+# The order is kept stable for readability; modern pip resolves the graph safely.
+
+litellm==1.82.6
+crewai[file-processing,google-genai,litellm,tools]==1.12.2
+python-dotenv==1.1.1
+pydantic==2.11.10
+PyYAML==6.0.3
+PyMuPDF==1.26.7
+beautifulsoup4==4.13.5
+markdown==3.10.2
+weasyprint==68.1
