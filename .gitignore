@@ -2,6 +2,7 @@
 .venv/
 .cache/
 crewai_memory/
+.claude/
 __pycache__/
 *.py[cod]
 *.tmp

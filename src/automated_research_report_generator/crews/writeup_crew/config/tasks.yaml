@@ -3,8 +3,6 @@ compile_report:
     为 {company_name} 汇编最终版 v2 研究报告。
 
     输入：
-    - 研究范围：
-      {research_scope_text}
     - 历史与背景分析包：
       {history_background_pack_text}
     - 行业分析包：
@@ -19,10 +17,6 @@ compile_report:
       {operating_metrics_pack_text}
     - 风险分析包：
       {risk_pack_text}
-    - 可比公司分析包：
-      {peers_pack_text}
-    - 内在价值分析包：
-      {intrinsic_value_pack_text}
     - 估值分析包：
       {valuation_pack_text}
     - 投资逻辑：
@@ -56,28 +50,23 @@ compile_report:
         完整插入 {industry_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
 
     ## 5. 业务分析
-        完整插入 {business_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+        完整插入 {business_pack_text} 和 {operating_metrics_pack_text}的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
 
     ## 6. 财务分析
         完整插入 {finance_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
 
-    ## 7. 运营指标分析
-        完整插入 {operating_metrics_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
-
-    ## 8. 风险分析
+    ## 7. 风险分析
         完整插入 {risk_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
 
-    ## 9. 可比公司估值
-        完整插入 {peers_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+    ## 8. 可比公司情况
+        完整插入 {peer_info_pack_text}的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
 
-    ## 10. 内在价值估值
-        完整插入 {intrinsic_value_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
-
-    ## 11. 综合估值
+    ## 9. 综合估值
         完整插入 {valuation_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
 
-    ## 12. QA摘要与结论边界
+    ## 10. QA摘要与结论边界
         完整插入 {final_qa_summary} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+        
   agent: report_editor
   output_file: "{final_report_markdown_path}"
 
