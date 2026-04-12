@@ -722,6 +722,7 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             "extract_guidance": getattr(crew_instance, "extract_guidance", ""),
             "qa_guidance": getattr(crew_instance, "qa_guidance", ""),
             "synthesize_guidance": getattr(crew_instance, "synthesize_guidance", ""),
+            "output_skeleton": getattr(crew_instance, "output_skeleton", ""),
             "pack_output_path": output_path,
             "loop_reason": loop_reason,
             "qa_feedback": qa_feedback,
@@ -1170,5 +1171,3 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         """
 
         return read_text_if_exists(path)
-
-

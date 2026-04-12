@@ -1,4 +1,10 @@
 search_facts:
+  crew_name: "business_crew"
+  pack_name: "business_pack"
+  pack_title: "业务分析包"
+  pack_focus: "围绕产品与解决方案、客户结构、收入模式、供应链交付、技术壁垒和扩张路径完成业务专题研究。"
+  output_title: "业务分析包"
+  search_guidance: "重点补充客户集中度、产品市场份额、订单兑现率、技术来源（自研/外购/合作）和主要竞争对手的公开资料。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行外部搜索补证任务。
 
@@ -21,10 +27,11 @@ search_facts:
     - 每条新结论都要补 `add_evidence`，必要时调用 `status_update`。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的外部搜索补证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的搜索补证完成报告：已更新的 entry_id 列表、未解决的缺口、主要证据来源摘要。
   agent: search_fact_agent
 
 extract_file_facts:
+  extract_guidance: "重点提取产品矩阵、客户分层与集中度、交付流程、收入确认方式和管理层对业务扩张的核心表述。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行 PDF 提取补证任务。
 
@@ -47,10 +54,11 @@ extract_file_facts:
     - 每条关键提取结果都要用 `add_evidence` 写明页码或原始来源。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 PDF 取证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的 PDF 提取完成报告：已更新的 entry_id 列表、未解决的缺口、关键原文引用来源（含页码）。
   agent: extract_file_fact_agent
 
 check_registry:
+  qa_guidance: "确认业务包是否已经回答'靠什么拿单、怎么交付、如何扩大份额'；客户集中度和技术来源是否有数据支撑。"
   description: >
     检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
 
@@ -62,10 +70,40 @@ check_registry:
     - 你不负责新增正文内容；你只负责检查、标记和留痕。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 registry 检查，并对遗漏项补充了 revision_detail。
+    面向 manager 的 QA 检查备忘录：整体就绪状态（ready/not ready）、未通过的 entry_id 及问题类型、修订建议、建议回退给 search 还是 extract。
   agent: qa_check_agent
 
 synthesize_and_output:
+  synthesize_guidance: "输出要明确商业模式闭环、客户结构与集中度风险、技术护城河强度、扩张路径可行性和待验证假设。"
+  output_skeleton: |
+    严格按下列格式形成一份结构化文本，严格使用下列标题作为标题，不得遗漏以下任何一个标题，不要增加任何标题和分节。必要时可以补充表格辅助阅读。
+    每节要求写明：核心结论 / 关键证据或数据 / 冲突点 / 待确认事项。
+
+    # {company_name} 业务分析
+    ## 1. 产品与解决方案
+    - 1.1 产品/服务矩阵与分类
+    - 1.2 核心产品的技术特征与差异化
+    - 1.3 产品生命周期与迭代节奏
+    ## 2. 客户与需求场景
+    - 2.1 目标客户群体与典型需求场景
+    - 2.2 客户集中度与前五大客户占比
+    - 2.3 客户粘性与复购/续约特征
+    ## 3. 收入模式与商业闭环
+    - 3.1 收入确认方式与商业模式类型（项目制/订阅制/许可制等）
+    - 3.2 从获客到交付到回款的完整闭环
+    - 3.3 单位经济模型（如有数据）
+    ## 4. 供应链与交付能力
+    - 4.1 关键供应商与采购集中度
+    - 4.2 交付流程与产能瓶颈
+    - 4.3 供应链风险与替代方案
+    ## 5. 技术与竞争优势
+    - 5.1 技术来源（自研/外购/合作）与研发投入
+    - 5.2 核心竞争壁垒与护城河强度
+    - 5.3 与主要竞争对手的差异化定位
+    ## 6. 扩张路径与关键分歧
+    - 6.1 管理层披露的增长战略
+    - 6.2 扩张路径的可行性评估
+    - 6.3 待验证的关键商业假设
   description: >
     基于 registry 为 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
 
@@ -87,6 +125,6 @@ synthesize_and_output:
     - {synthesize_guidance}
     - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否还有残余缺口。
   expected_output: >
-    输出一份题为《{company_name} {output_title}》的 Markdown 分析包。
+    {output_skeleton}
   agent: synthesizing_agent
   output_file: "{pack_output_path}"

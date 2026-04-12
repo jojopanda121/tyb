@@ -1790,20 +1790,13 @@ entries:
   priority: medium
   title: "{company_name} 战略执行可信度"
   description: "判断管理层战略规划的合理性和执行能力。"
-- entry_id: F_PEER_001
-  entry_type: fact
-  topic: peer_info
-  owner_crew: peer_info_crew
-  priority: high
-  title: "{company_name} 可比公司选择逻辑"
-  description: "可比公司选取标准（产品/规模/区域/成长阶段/数据可获得性）及排除原因。"
 - entry_id: D_PEER_001
   entry_type: data
   topic: peer_info
   owner_crew: peer_info_crew
   priority: high
   title: "{company_name} 可比公司基本信息"
-  description: "选择3-8家可比公司，输出其名称、股票代码、上市地、市值、介绍、业务规模。"
+  description: "登记可比公司名称、股票代码、上市地、市值、介绍、业务规模、选取原因。"
   content_type: table
   columns:
   - 公司
@@ -1813,7 +1806,7 @@ entries:
   - 公司介绍
   - 业务规模
   - 可比业务范围
-  - 可比性评价
+  - 可比性评价/选取原因
   - 资料来源
   content: []
 - entry_id: D_PEER_002
@@ -1865,7 +1858,10 @@ entries:
   - PE(Fwd)
   - PB
   - EV/EBITDA
+  - PS
+  - EV/Sales
   - PEG
+  - 其他指标
   - 资料来源
   content: []
 - entry_id: D_PEER_004

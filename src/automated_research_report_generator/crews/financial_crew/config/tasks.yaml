@@ -1,4 +1,10 @@
 search_facts:
+  crew_name: "financial_crew"
+  pack_name: "finance_pack"
+  pack_title: "财务分析包"
+  pack_focus: "围绕收入结构与增长驱动、盈利质量与利润率趋势、现金流转换、营运资本效率和资产负债压力完成财务专题研究。"
+  output_title: "财务分析包"
+  search_guidance: "只有当 PDF 缺关键财务字段（如分部收入、现金流明细）时才补公开资料；补数据必须明确来源、口径和报告期。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行外部搜索补证任务。
 
@@ -22,10 +28,11 @@ search_facts:
     - 每条新结论都要补 `add_evidence`，必要时调用 `status_update`。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的外部搜索补证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的搜索补证完成报告：已更新的 entry_id 列表、未解决的缺口、主要证据来源摘要。
   agent: search_fact_agent
 
 extract_file_facts:
+  extract_guidance: "优先提取利润表、资产负债表、现金流量表及附注中的分部信息、会计政策和非经常性损益；先做口径标准化再下结论。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行 PDF 提取补证任务。
 
@@ -49,10 +56,11 @@ extract_file_facts:
     - 每条关键提取结果都要用 `add_evidence` 写明页码或原始来源。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 PDF 取证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的 PDF 提取完成报告：已更新的 entry_id 列表、未解决的缺口、关键原文引用来源（含页码）。
   agent: extract_file_fact_agent
 
 check_registry:
+  qa_guidance: "确认收入结构、利润质量（扣非后）、经营性现金流/净利润比率和资产负债压力是否已形成可支撑估值的定量结论。"
   description: >
     检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
 
@@ -64,10 +72,39 @@ check_registry:
     - 你不负责新增正文内容；你只负责检查、标记和留痕。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 registry 检查，并对遗漏项补充了 revision_detail。
+    面向 manager 的 QA 检查备忘录：整体就绪状态（ready/not ready）、未通过的 entry_id 及问题类型、修订建议、建议回退给 search 还是 extract。
   agent: qa_check_agent
 
 synthesize_and_output:
+  synthesize_guidance: "输出要明确收入驱动因子、盈利质量判断、现金转换效率、杠杆水平和对估值模型输入有直接影响的财务缺口。"
+  output_skeleton: |
+    严格按下列格式形成一份结构化文本，严格使用下列标题作为标题，不得遗漏以下任何一个标题，不要增加任何标题和分节。必要时可以补充表格辅助阅读。
+    每节要求写明：核心结论 / 关键证据或数据 / 冲突点 / 待确认事项。
+
+    # {company_name} 财务分析
+    ## 1. 核心财务数据总表
+    - 1.1 近三年主要财务指标汇总（收入、净利润、经营性现金流等）
+    - 1.2 数据口径说明（会计准则、报告期、是否经审计）
+    ## 2. 收入与成本结构
+    - 2.1 收入分部构成与各分部增速
+    - 2.2 成本结构与毛利率变动趋势
+    - 2.3 收入确认政策与关键假设
+    ## 3. 盈利质量与利润率趋势
+    - 3.1 扣非净利润与经常性/非经常性损益拆分
+    - 3.2 毛利率、净利率、EBITDA 利润率趋势
+    - 3.3 盈利质量判断（利润的现金含量）
+    ## 4. 现金流与营运资本
+    - 4.1 经营性现金流/净利润比率
+    - 4.2 应收账款周转、存货周转和应付账款周转
+    - 4.3 营运资本变动趋势与资金占用
+    ## 5. 资产负债与资本结构
+    - 5.1 资产负债率与有息负债规模
+    - 5.2 短期偿债能力（流动比率、速动比率）
+    - 5.3 资本结构与融资安排
+    ## 6. 财务综合判断与估值影响
+    - 6.1 对估值模型关键输入的影响（增长率、利润率、WACC 等）
+    - 6.2 财务风险信号与关注事项
+    - 6.3 仍缺失的关键财务数据
   description: >
     基于 registry 为 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
 
@@ -90,6 +127,6 @@ synthesize_and_output:
     - {synthesize_guidance}
     - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否还有残余缺口。
   expected_output: >
-    输出一份题为《{company_name} {output_title}》的 Markdown 分析包。
+    {output_skeleton}
   agent: synthesizing_agent
   output_file: "{pack_output_path}"

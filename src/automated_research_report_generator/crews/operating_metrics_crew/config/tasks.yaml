@@ -1,4 +1,10 @@
 search_facts:
+  crew_name: "operating_metrics_crew"
+  pack_name: "operating_metrics_pack"
+  pack_title: "运营指标分析包"
+  pack_focus: "围绕产能与利用率、订单与交付周期、ASP 趋势、客户验证指标和效率比率完成运营指标专题研究。"
+  output_title: "运营指标分析包"
+  search_guidance: "重点查找最能改变投资判断的运营指标（如产能利用率、订单增速、ASP 变化）；搜不到就明确写缺口，不要编造。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行外部搜索补证任务。
 
@@ -22,10 +28,11 @@ search_facts:
     - 每条新结论都要补 `add_evidence`，必要时调用 `status_update`。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的外部搜索补证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的搜索补证完成报告：已更新的 entry_id 列表、未解决的缺口、主要证据来源摘要。
   agent: search_fact_agent
 
 extract_file_facts:
+  extract_guidance: "从 PDF 中提取产能、产量、利用率、在手订单、交付周期、客户数量和 ASP 等指标线索；注意区分披露口径和时间范围。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行 PDF 提取补证任务。
 
@@ -49,10 +56,11 @@ extract_file_facts:
     - 每条关键提取结果都要用 `add_evidence` 写明页码或原始来源。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 PDF 取证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的 PDF 提取完成报告：已更新的 entry_id 列表、未解决的缺口、关键原文引用来源（含页码）。
   agent: extract_file_fact_agent
 
 check_registry:
+  qa_guidance: "确认是否已得到少量但关键的运营指标并有明确口径，而不是泛泛罗列无法支撑判断的数字。"
   description: >
     检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
 
@@ -64,10 +72,38 @@ check_registry:
     - 你不负责新增正文内容；你只负责检查、标记和留痕。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 registry 检查，并对遗漏项补充了 revision_detail。
+    面向 manager 的 QA 检查备忘录：整体就绪状态（ready/not ready）、未通过的 entry_id 及问题类型、修订建议、建议回退给 search 还是 extract。
   agent: qa_check_agent
 
 synthesize_and_output:
+  synthesize_guidance: "输出要聚焦核心 KPI 定义与趋势、产能扩张计划、同行指标对比和仍不可确认的关键缺口。"
+  output_skeleton: |
+    严格按下列格式形成一份结构化文本，严格使用下列标题作为标题，不得遗漏以下任何一个标题，不要增加任何标题和分节。必要时可以补充表格辅助阅读。
+    每节要求写明：核心结论 / 关键证据或数据 / 冲突点 / 待确认事项。
+
+    # {company_name} 运营指标分析
+    ## 1. 核心 KPI 定义与口径
+    - 1.1 本公司关键运营指标清单及其定义
+    - 1.2 指标口径说明（计算方式、时间范围、是否经审计）
+    ## 2. 产能、产量与 ASP
+    - 2.1 设计产能、有效产能与实际产量
+    - 2.2 产能利用率趋势
+    - 2.3 平均销售价格（ASP）及变动趋势
+    ## 3. 订单、交付与客户验证
+    - 3.1 在手订单规模与增速
+    - 3.2 订单交付周期与履约率
+    - 3.3 客户数量变动与新增/流失
+    ## 4. 效率趋势及财务印证
+    - 4.1 人均产出、单位成本等效率指标
+    - 4.2 运营指标与财务表现的传导关系
+    - 4.3 效率改善或恶化的关键驱动因素
+    ## 5. 同行指标对比
+    - 5.1 与可比公司的核心运营指标对比
+    - 5.2 行业基准与 {company_name} 的相对位置
+    ## 6. 关键缺口与未确认指标
+    - 6.1 仍缺失的关键运营数据
+    - 6.2 数据可信度存疑的指标
+    - 6.3 对投资判断有重大影响的未确认信息
   description: >
     基于 registry 为 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
 
@@ -90,6 +126,6 @@ synthesize_and_output:
     - {synthesize_guidance}
     - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否还有残余缺口。
   expected_output: >
-    输出一份题为《{company_name} {output_title}》的 Markdown 分析包。
+    {output_skeleton}
   agent: synthesizing_agent
   output_file: "{pack_output_path}"

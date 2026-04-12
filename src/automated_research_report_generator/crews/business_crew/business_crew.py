@@ -8,6 +8,10 @@ from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task
 from crewai_tools import SerperDevTool
 
+from automated_research_report_generator.crews.crew_profile_loader import (
+    load_research_task_profile,
+    strip_research_task_profile_fields,
+)
 from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.llm_config import get_heavy_llm
 from automated_research_report_generator.tools import (
@@ -30,6 +34,7 @@ PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "business_crew.json")
 shared_pdf_page_index_tool = ReadPdfPageIndexTool()
 shared_pdf_page_reader_tool = ReadPdfPagesTool()
+CREW_PROFILE = load_research_task_profile(__file__)
 
 
 @CrewBase
@@ -49,15 +54,16 @@ class BusinessCrew:
     tasks_config = "config/tasks.yaml"
     output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
 
-    crew_name = "business_crew"
-    pack_name = "business_pack"
-    pack_title = "业务分析包"
-    pack_focus = "围绕产品、客户、交付链条、竞争优势和扩张逻辑完成业务专题研究。"
-    output_title = "业务分析包"
-    search_guidance = "重点补客户、产品、订单兑现、技术来源和竞争对手的公开资料。"
-    extract_guidance = "重点提取产品矩阵、客户分层、交付流程和管理层对业务扩张的表述。"
-    qa_guidance = "确认业务包是否已经回答“靠什么拿单、怎么交付、如何扩大份额”。"
-    synthesize_guidance = "输出要明确商业模式、客户结构、技术来源、护城河和待验证假设。"
+    crew_name = CREW_PROFILE["crew_name"]
+    pack_name = CREW_PROFILE["pack_name"]
+    pack_title = CREW_PROFILE["pack_title"]
+    pack_focus = CREW_PROFILE["pack_focus"]
+    output_title = CREW_PROFILE["output_title"]
+    search_guidance = CREW_PROFILE["search_guidance"]
+    extract_guidance = CREW_PROFILE["extract_guidance"]
+    qa_guidance = CREW_PROFILE["qa_guidance"]
+    synthesize_guidance = CREW_PROFILE["synthesize_guidance"]
+    output_skeleton = CREW_PROFILE["output_skeleton"]
     use_search_tool = True
     default_temperature = 0.2
     extra_tool_factories: tuple[Callable[[], object], ...] = ()
@@ -151,13 +157,20 @@ class BusinessCrew:
             StatusUpdateTool(),
         ]
 
-    def _build_agent(self, *, config_name: str, tools: list[object], temperature: float | None = None) -> Agent:
+    def _build_agent(
+        self,
+        *,
+        config_name: str,
+        tools: list[object],
+        temperature: float | None = None,
+        allow_delegation: bool = False,
+    ) -> Agent:
         """
         目的：统一构建业务专题各类 agent。
         功能：把 YAML 配置、工具、模型和通用运行参数组合成 `Agent` 实例。
         实现逻辑：读取对应 agent 配置后，套用当前专题共用的运行约束。
-        可调参数：`config_name`、工具列表和可选 `temperature`。
-        默认参数及原因：默认关闭 delegation，原因是层级调度责任由 manager 统一承担。
+        可调参数：`config_name`、工具列表、可选 `temperature` 和 delegation 开关。
+        默认参数及原因：默认关闭 delegation，原因是只有 custom manager 负责跨 agent 调度。
         """
 
         return Agent(
@@ -169,7 +182,7 @@ class BusinessCrew:
             max_rpm=None,
             max_execution_time=None,
             verbose=True,
-            allow_delegation=False,
+            allow_delegation=allow_delegation,
             step_callback=None,
             cache=True,
             allow_code_execution=False,
@@ -182,6 +195,23 @@ class BusinessCrew:
         )
 
     @agent
+    def manager_agent(self) -> Agent:
+        """
+        目的：定义业务专题的层级调度 manager agent。
+        功能：只通过委派和追问能力，按既定顺序调度提取、搜索、检查和综合任务。
+        实现逻辑：使用独立 manager 配置，不挂载任何业务工具，并显式开启 delegation。
+        可调参数：YAML agent 配置和 manager 温度。
+        默认参数及原因：默认 `temperature=0.1`，原因是调度判断应稳定收敛，不应发散分析。
+        """
+
+        return self._build_agent(
+            config_name="manager_agent",
+            tools=[],
+            temperature=0.1,
+            allow_delegation=True,
+        )
+
+    @agent
     def search_fact_agent(self) -> Agent:
         """
         目的：定义业务专题的外部搜索 agent。
@@ -191,7 +221,7 @@ class BusinessCrew:
         默认参数及原因：默认沿用专题基础温度，原因是业务搜索既要收敛也要保留适度发散能力。
         """
 
-        return self._build_agent(config_name="search_fact_agent", tools=self._search_tools())
+        return self._build_agent(config_name="search_fact_agent", tools=self._search_tools(), temperature=0.15)
 
     @agent
     def extract_file_fact_agent(self) -> Agent:
@@ -203,7 +233,7 @@ class BusinessCrew:
         默认参数及原因：默认沿用专题基础温度，原因是业务原文提取以稳定取证为先。
         """
 
-        return self._build_agent(config_name="extract_file_fact_agent", tools=self._extract_tools())
+        return self._build_agent(config_name="extract_file_fact_agent", tools=self._extract_tools(), temperature=0.1)
 
     @agent
     def qa_check_agent(self) -> Agent:
@@ -227,7 +257,7 @@ class BusinessCrew:
         默认参数及原因：默认 `temperature=0.15`，原因是综合输出要收束但仍需一定表达弹性。
         """
 
-        return self._build_agent(config_name="synthesizing_agent", tools=self._synthesizing_tools(), temperature=0.15)
+        return self._build_agent(config_name="synthesizing_agent", tools=self._synthesizing_tools(), temperature=0.2)
 
     @task
     def search_facts(self) -> Task:
@@ -240,7 +270,7 @@ class BusinessCrew:
         """
 
         return Task(
-            config=self.tasks_config["search_facts"],  # type: ignore[index]
+            config=strip_research_task_profile_fields(self.tasks_config["search_facts"]),  # type: ignore[index]
             tools=[],
             async_execution=False,
             output_json=None,
@@ -261,7 +291,7 @@ class BusinessCrew:
         """
 
         return Task(
-            config=self.tasks_config["extract_file_facts"],  # type: ignore[index]
+            config=strip_research_task_profile_fields(self.tasks_config["extract_file_facts"]),  # type: ignore[index]
             tools=[],
             async_execution=False,
             output_json=None,
@@ -282,8 +312,8 @@ class BusinessCrew:
         """
 
         return Task(
-            config=self.tasks_config["check_registry"],  # type: ignore[index]
-            context=[self.search_facts(), self.extract_file_facts()],
+            config=strip_research_task_profile_fields(self.tasks_config["check_registry"]),  # type: ignore[index]
+            context=[self.extract_file_facts(), self.search_facts()],
             tools=[],
             async_execution=False,
             output_json=None,
@@ -304,8 +334,8 @@ class BusinessCrew:
         """
 
         return Task(
-            config=self.tasks_config["synthesize_and_output"],  # type: ignore[index]
-            context=[self.search_facts(), self.extract_file_facts(), self.check_registry()],
+            config=strip_research_task_profile_fields(self.tasks_config["synthesize_and_output"]),  # type: ignore[index]
+            context=[self.extract_file_facts(), self.search_facts(), self.check_registry()],
             tools=[],
             async_execution=False,
             output_json=None,
@@ -320,8 +350,8 @@ class BusinessCrew:
         """
         目的：输出业务专题最终使用的层级 research crew。
         功能：汇总 4 个 agent 和 4 个 task，交给 CrewAI 以 hierarchical process 运行。
-        实现逻辑：先确保日志目录存在，再返回带 manager_llm 的 `Crew` 实例。
-        可调参数：日志路径、缓存、tracing 和 manager/chat llm。
+        实现逻辑：先确保日志目录存在，再返回带 custom manager_agent 的 `Crew` 实例。
+        可调参数：日志路径、缓存、tracing、manager/chat llm 和固定 task 顺序。
         默认参数及原因：默认采用 `Process.hierarchical`，原因是业务专题仍按设计由 manager 统一调度。
         """
 
@@ -329,12 +359,22 @@ class BusinessCrew:
             Path(self.output_log_file_path).parent.mkdir(parents=True, exist_ok=True)
         return Crew(
             name=self.crew_name,
-            agents=self.agents,
-            tasks=self.tasks,
+            agents=[
+                self.extract_file_fact_agent(),
+                self.search_fact_agent(),
+                self.qa_check_agent(),
+                self.synthesizing_agent(),
+            ],
+            tasks=[
+                self.extract_file_facts(),
+                self.search_facts(),
+                self.check_registry(),
+                self.synthesize_and_output(),
+            ],
             process=Process.hierarchical,
             verbose=True,
-            manager_llm=get_heavy_llm(temperature=0.1),
-            manager_agent=None,
+            manager_llm=None,
+            manager_agent=self.manager_agent(),
             function_calling_llm=None,
             config=None,
             max_rpm=None,

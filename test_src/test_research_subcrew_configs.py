@@ -62,8 +62,19 @@ def test_research_subcrews_have_yaml_agent_and_task_configs():
         agent_config = yaml.safe_load(agent_config_path.read_text(encoding="utf-8"))
         task_config = yaml.safe_load(task_config_path.read_text(encoding="utf-8"))
 
+        assert str(agent_config["manager_agent"]["role"]).strip() == "{pack_title}层级调度经理"
         assert str(agent_config["search_fact_agent"]["role"]).strip() == "{pack_title}外部搜索分析师"
         assert task_config["synthesize_and_output"]["output_file"] == "{pack_output_path}"
+        assert task_config["search_facts"]["crew_name"] == crew_instance.crew_name
+        assert task_config["search_facts"]["pack_name"] == crew_instance.pack_name
+        assert task_config["search_facts"]["pack_title"] == crew_instance.pack_title
+        assert task_config["search_facts"]["pack_focus"] == crew_instance.pack_focus
+        assert task_config["search_facts"]["output_title"] == crew_instance.output_title
+        assert task_config["search_facts"]["search_guidance"] == crew_instance.search_guidance
+        assert task_config["extract_file_facts"]["extract_guidance"] == crew_instance.extract_guidance
+        assert task_config["check_registry"]["qa_guidance"] == crew_instance.qa_guidance
+        assert task_config["synthesize_and_output"]["synthesize_guidance"] == crew_instance.synthesize_guidance
+        assert task_config["synthesize_and_output"]["output_skeleton"] == crew_instance.output_skeleton
 
 
 def test_research_subcrew_can_build_runtime_crew_from_yaml_configs():
@@ -80,6 +91,29 @@ def test_research_subcrew_can_build_runtime_crew_from_yaml_configs():
     assert runtime_crew.process in {Process.hierarchical, "hierarchical"}
     assert len(runtime_crew.agents) == 4
     assert len(runtime_crew.tasks) == 4
+
+
+def test_research_subcrew_runtime_uses_custom_manager_agent_for_dispatch():
+    """
+    目的：锁定 research sub-crew 已切换到 CrewAI custom manager agent 调度。
+    功能：检查运行时 crew 带有独立 manager agent，且 manager 不会被错误塞进 agents 列表。
+    实现逻辑：遍历 7 个 research sub-crew，分别构建 runtime crew 后断言 manager 接线和任务归属都正确。
+    可调参数：当前无。
+    默认参数及原因：默认覆盖全部 7 个 research sub-crew，原因是这条调度边界需要全局一致。
+    """
+
+    for crew_instance in _research_subcrew_instances():
+        runtime_crew = crew_instance.crew()
+
+        assert runtime_crew.manager_agent is not None
+        assert runtime_crew.manager_llm is None
+        assert runtime_crew.manager_agent not in runtime_crew.agents
+        assert runtime_crew.manager_agent.allow_delegation is True
+        assert runtime_crew.manager_agent.tools == []
+        assert "文件提取分析师" in str(runtime_crew.tasks[0].agent.role)
+        assert "外部搜索分析师" in str(runtime_crew.tasks[1].agent.role)
+        assert "注册表检查员" in str(runtime_crew.tasks[2].agent.role)
+        assert "综合分析师" in str(runtime_crew.tasks[3].agent.role)
 
 
 def test_research_registry_template_is_deterministic_and_covers_all_subcrews():
@@ -211,6 +245,7 @@ def test_research_subcrew_inputs_include_pack_metadata_and_upstream_pack_text(tm
     assert inputs["extract_guidance"] == peer_info_crew.extract_guidance
     assert inputs["qa_guidance"] == peer_info_crew.qa_guidance
     assert inputs["synthesize_guidance"] == peer_info_crew.synthesize_guidance
+    assert inputs["output_skeleton"] == peer_info_crew.output_skeleton
     assert inputs["industry_pack_text"] == "industry pack body"
     assert inputs["business_pack_text"] == "business pack body"
 
@@ -227,3 +262,126 @@ def test_research_subcrew_base_module_is_removed():
     legacy_base_file = PROJECT_ROOT / "src" / "automated_research_report_generator" / "crews" / "research_subcrew_base.py"
 
     assert not legacy_base_file.exists()
+
+
+# --- 以下为 prompt 精修后新增的断言 ---
+
+
+_CREW_DOMAIN_KEYWORDS: dict[str, str] = {
+    "history_background_crew": "治理",
+    "industry_crew": "行业",
+    "business_crew": "商业",
+    "peer_info_crew": "可比",
+    "financial_crew": "财务",
+    "operating_metrics_crew": "运营",
+    "risk_crew": "风险",
+}
+
+_CREW_SKELETON_HEADINGS: dict[str, list[str]] = {
+    "history_background_crew": ["公司基本信息与定位", "发展时间线与关键里程碑", "股权结构与实际控制人", "董监高与治理结构"],
+    "industry_crew": ["市场规模与增长驱动因素", "产业链结构分析", "竞争格局与主要参与者", "行业壁垒、替代品与进入门槛", "监管环境与政策导向"],
+    "business_crew": ["产品与解决方案", "客户与需求场景", "收入模式与商业闭环", "供应链与交付能力", "技术与竞争优势"],
+    "peer_info_crew": ["可比公司筛选标准与样本清单", "经营与产品可比性", "财务与运营指标对比", "估值倍数对比"],
+    "financial_crew": ["核心财务数据总表", "收入与成本结构", "盈利质量与利润率趋势", "现金流与营运资本", "资产负债与资本结构"],
+    "operating_metrics_crew": ["核心 KPI 定义与口径", "产能、产量与 ASP", "订单、交付与客户验证", "效率趋势及财务印证"],
+    "risk_crew": ["风险总览矩阵", "经营与客户风险", "供应链与产能风险", "技术与治理风险", "政策与外部环境风险"],
+}
+
+
+def test_research_subcrew_agents_have_domain_persona_backstories():
+    """
+    目的：锁定 agents.yaml 的 backstory 包含领域关键词而非纯操作步骤。
+    功能：检查 search_fact_agent 和 synthesizing_agent 的 backstory 包含该 crew 的领域关键词。
+    """
+
+    for crew_instance in _research_subcrew_instances():
+        crew_name = getattr(crew_instance, "crew_name", "")
+        keyword = _CREW_DOMAIN_KEYWORDS.get(crew_name, "")
+        if not keyword:
+            continue
+
+        module_dir = Path(inspect.getfile(crew_instance.__class__)).resolve().parent
+        agent_config = yaml.safe_load((module_dir / "config" / "agents.yaml").read_text(encoding="utf-8"))
+
+        search_backstory = str(agent_config["search_fact_agent"]["backstory"])
+        synth_backstory = str(agent_config["synthesizing_agent"]["backstory"])
+        qa_backstory = str(agent_config["qa_check_agent"]["backstory"])
+
+        assert keyword in search_backstory, f"{crew_name} search_fact_agent backstory 缺少领域关键词 '{keyword}'"
+        assert keyword in synth_backstory, f"{crew_name} synthesizing_agent backstory 缺少领域关键词 '{keyword}'"
+        assert keyword in qa_backstory, f"{crew_name} qa_check_agent backstory 缺少领域关键词 '{keyword}'"
+
+
+def test_research_subcrew_task_placeholders_appear_at_most_once():
+    """
+    目的：防止 prompt 中出现多重注入。
+    功能：检查每个 task description 中 {pack_focus}、{qa_feedback}、{owner_crew} 最多出现一次。
+    """
+
+    for crew_instance in _research_subcrew_instances():
+        crew_name = getattr(crew_instance, "crew_name", "")
+        module_dir = Path(inspect.getfile(crew_instance.__class__)).resolve().parent
+        task_config = yaml.safe_load((module_dir / "config" / "tasks.yaml").read_text(encoding="utf-8"))
+
+        for task_name, task_data in task_config.items():
+            description = str(task_data.get("description", ""))
+            for placeholder in ["{pack_focus}", "{qa_feedback}"]:
+                count = description.count(placeholder)
+                assert count <= 1, (
+                    f"{crew_name}/{task_name} 中 {placeholder} 出现了 {count} 次，应最多 1 次"
+                )
+            owner_crew_count = description.count("{owner_crew}")
+            assert owner_crew_count <= 2, (
+                f"{crew_name}/{task_name} 中 {{owner_crew}} 出现了 {owner_crew_count} 次，应最多 2 次"
+            )
+
+
+def test_research_subcrew_synthesize_output_skeleton_has_fixed_headings():
+    """
+    目的：锁定 synthesize_and_output 的 expected_output 使用 {output_skeleton} 占位符。
+    功能：检查每个 crew 的 output_skeleton 包含该 pack 的固定一级标题。
+    """
+
+    for crew_instance in _research_subcrew_instances():
+        crew_name = getattr(crew_instance, "crew_name", "")
+        skeleton = getattr(crew_instance, "output_skeleton", "")
+
+        assert skeleton, f"{crew_name} 缺少 output_skeleton 属性"
+
+        expected_headings = _CREW_SKELETON_HEADINGS.get(crew_name, [])
+        for heading in expected_headings:
+            assert heading in skeleton, f"{crew_name} output_skeleton 缺少标题 '{heading}'"
+
+
+def test_research_subcrew_temperature_hierarchy():
+    """
+    目的：锁定温度分层：synthesis > search > extract，manager 和 qa 保持最低。
+    功能：构建 runtime crew 后检查各 agent 的 LLM 温度设置。
+    """
+
+    for crew_instance in _research_subcrew_instances():
+        crew_name = getattr(crew_instance, "crew_name", "")
+        runtime_crew = crew_instance.crew()
+
+        agent_temps = {}
+        for a in runtime_crew.agents:
+            role = str(a.role).strip()
+            if "综合分析师" in role:
+                agent_temps["synthesis"] = a.llm.temperature
+            elif "外部搜索分析师" in role:
+                agent_temps["search"] = a.llm.temperature
+            elif "文件提取分析师" in role:
+                agent_temps["extract"] = a.llm.temperature
+            elif "注册表检查员" in role:
+                agent_temps["qa"] = a.llm.temperature
+
+        manager_temp = runtime_crew.manager_agent.llm.temperature
+
+        assert manager_temp <= 0.1, f"{crew_name} manager 温度应 <= 0.1, 实际 {manager_temp}"
+        assert agent_temps.get("qa", 0) <= 0.1, f"{crew_name} qa 温度应 <= 0.1"
+        assert agent_temps.get("extract", 0) <= agent_temps.get("search", 0), (
+            f"{crew_name} extract 温度应 <= search 温度"
+        )
+        assert agent_temps.get("search", 0) < agent_temps.get("synthesis", 0), (
+            f"{crew_name} search 温度应 < synthesis 温度"
+        )

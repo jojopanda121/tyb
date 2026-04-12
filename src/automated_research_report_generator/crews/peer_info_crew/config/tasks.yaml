@@ -1,4 +1,10 @@
 search_facts:
+  crew_name: "peer_info_crew"
+  pack_name: "peer_info_pack"
+  pack_title: "同行信息分析包"
+  pack_focus: "围绕可比公司筛选标准、样本清单、经营与财务可比性、估值倍数对比和可比性限制完成同行专题研究。"
+  output_title: "同行信息分析包"
+  search_guidance: "重点筛选同行名单并补齐主营构成差异、地域差异、规模差异和上市状态；搜集 peer 的收入、利润率和估值倍数。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行外部搜索补证任务。
 
@@ -23,10 +29,11 @@ search_facts:
     - 每条新结论都要补 `add_evidence`，必要时调用 `status_update`。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的外部搜索补证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的搜索补证完成报告：已更新的 entry_id 列表、未解决的缺口、主要证据来源摘要。
   agent: search_fact_agent
 
 extract_file_facts:
+  extract_guidance: "重点从 PDF 中提取管理层自认的可比对象、竞争对手、业务相似度线索和已有的 peer 对比数据。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行 PDF 提取补证任务。
 
@@ -51,10 +58,11 @@ extract_file_facts:
     - 每条关键提取结果都要用 `add_evidence` 写明页码或原始来源。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 PDF 取证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的 PDF 提取完成报告：已更新的 entry_id 列表、未解决的缺口、关键原文引用来源（含页码）。
   agent: extract_file_fact_agent
 
 check_registry:
+  qa_guidance: "确认同行名单是否有明确的纳入/排除标准、关键 peer 指标是否口径一致、估值倍数是否已形成可复用底稿。"
   description: >
     检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
 
@@ -66,10 +74,36 @@ check_registry:
     - 你不负责新增正文内容；你只负责检查、标记和留痕。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 registry 检查，并对遗漏项补充了 revision_detail。
+    面向 manager 的 QA 检查备忘录：整体就绪状态（ready/not ready）、未通过的 entry_id 及问题类型、修订建议、建议回退给 search 还是 extract。
   agent: qa_check_agent
 
 synthesize_and_output:
+  synthesize_guidance: "输出要明确纳入与排除逻辑、peer 核心财务与运营指标对比、估值倍数区间和可比性限制对估值结论的影响。"
+  output_skeleton: |
+    严格按下列格式形成一份结构化文本，严格使用下列标题作为标题，不得遗漏以下任何一个标题，不要增加任何标题和分节。必要时可以补充表格辅助阅读。
+    每节要求写明：内容 / 来源 / 待确认事项。
+
+    # {company_name} 同行信息分析
+    ## 1. 可比公司筛选标准与样本清单
+    - 1.1 筛选维度（主营构成、地域、规模、上市状态）
+    - 1.2 纳入的可比公司清单及纳入理由
+    - 1.3 排除的候选公司及排除理由
+    ## 2. 经营与产品可比性
+    - 2.1 各 peer 的主营业务构成与 {company_name} 的相似度
+    - 2.2 产品/服务重叠度与差异点
+    - 2.3 地域覆盖与客户群体对比
+    ## 3. 财务与运营指标对比
+    - 3.1 收入规模与增速对比（需明确口径和报告期）
+    - 3.2 利润率对比（毛利率、净利率、EBITDA 利润率）
+    - 3.3 关键运营指标对比（如适用）
+    ## 4. 估值倍数对比
+    - 4.1 P/E、P/S、EV/EBITDA 等估值倍数
+    - 4.2 估值倍数的中位数与区间
+    - 4.3 估值数据来源与时点
+    ## 5. 可比性限制与使用边界
+    - 5.1 样本局限性（数量、质量、口径差异）
+    - 5.2 对估值结论的影响与使用建议
+    - 5.3 仍待补充的 peer 信息
   description: >
     基于 registry 为 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
 
@@ -93,6 +127,6 @@ synthesize_and_output:
     - {synthesize_guidance}
     - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否还有残余缺口。
   expected_output: >
-    输出一份题为《{company_name} {output_title}》的 Markdown 分析包。
+    {output_skeleton}
   agent: synthesizing_agent
   output_file: "{pack_output_path}"

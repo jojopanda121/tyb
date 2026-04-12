@@ -1,4 +1,10 @@
 search_facts:
+  crew_name: "history_background_crew"
+  pack_name: "history_background_pack"
+  pack_title: "历史与背景分析包"
+  pack_focus: "围绕公司沿革、发展时间线、股权结构、实际控制人、董监高和治理结构完成历史与背景专题研究。"
+  output_title: "历史与背景分析包"
+  search_guidance: "外部搜索只用于补充工商变更、股权穿透、关联方交易和历史诉讼等背景信息；主证据应优先来自公司披露材料。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行外部搜索补证任务。
 
@@ -21,10 +27,11 @@ search_facts:
     - 每条新结论都要补 `add_evidence`，必要时调用 `status_update`。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的外部搜索补证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的搜索补证完成报告：已更新的 entry_id 列表、未解决的缺口、主要证据来源摘要。
   agent: search_fact_agent
 
 extract_file_facts:
+  extract_guidance: "重点提取公司沿革时间线、历次股权变动、实控人链条、董监高履历和治理架构；注意捕捉关联交易和同业竞争披露。"
   description: >
     围绕 {company_name} 的 {pack_title} 执行 PDF 提取补证任务。
 
@@ -47,10 +54,11 @@ extract_file_facts:
     - 每条关键提取结果都要用 `add_evidence` 写明页码或原始来源。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 PDF 取证，并把新增 entry、证据或状态变化同步到 registry。
+    面向 manager 的 PDF 提取完成报告：已更新的 entry_id 列表、未解决的缺口、关键原文引用来源（含页码）。
   agent: extract_file_fact_agent
 
 check_registry:
+  qa_guidance: "确认实控人链条、股权穿透、董监高独立性和关联交易是否有完整可验证记录，而不只是公司自述。"
   description: >
     检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
 
@@ -62,10 +70,39 @@ check_registry:
     - 你不负责新增正文内容；你只负责检查、标记和留痕。
     - 任务结束前必须调用 `registry_review` 留痕。
   expected_output: >
-    已完成当前 pack 的 registry 检查，并对遗漏项补充了 revision_detail。
+    面向 manager 的 QA 检查备忘录：整体就绪状态（ready/not ready）、未通过的 entry_id 及问题类型、修订建议、建议回退给 search 还是 extract。
   agent: qa_check_agent
 
 synthesize_and_output:
+  synthesize_guidance: "输出要突出公司发展脉络、治理结构完整性、潜在治理风险（如实控人过度集中、关联交易）和仍待验证事项。"
+  output_skeleton: |
+    严格按下列格式形成一份结构化文本，严格使用下列标题作为标题，不得遗漏以下任何一个标题，不要增加任何标题和分节。必要时可以补充表格辅助阅读。
+    每节要求写明：内容 / 来源 / 待确认事项。
+
+    # {company_name} 历史与背景分析
+    ## 1. 公司基本信息与定位
+    - 1.1 公司全称、注册地、成立日期、上市/拟上市状态
+    - 1.2 主营业务定位与核心产品/服务概述
+    - 1.3 行业归属与市场定位
+    ## 2. 发展时间线与关键里程碑
+    - 2.1 创立与早期发展
+    - 2.2 重大业务转型、并购、融资事件
+    - 2.3 上市/拟上市历程
+    ## 3. 股权结构与实际控制人
+    - 3.1 实际控制人及控制链条（需完整穿透）
+    - 3.2 前十大股东及持股比例
+    - 3.3 历次重大股权变动及时间线
+    ## 4. 董监高与治理结构
+    - 4.1 董事会构成与独立董事比例
+    - 4.2 核心管理层履历与任期
+    - 4.3 监事会与审计委员会设置
+    ## 5. 关联关系与独立性判断
+    - 5.1 关联方清单及关联交易概况
+    - 5.2 同业竞争与独立性安排
+    - 5.3 潜在治理风险信号
+    ## 6. 待确认事项
+    - 6.1 仍缺乏验证的关键信息
+    - 6.2 信息冲突与待解决问题
   description: >
     基于 registry 为 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
 
@@ -87,6 +124,6 @@ synthesize_and_output:
     - {synthesize_guidance}
     - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否还有残余缺口。
   expected_output: >
-    输出一份题为《{company_name} {output_title}》的 Markdown 分析包。
+    {output_skeleton}
   agent: synthesizing_agent
   output_file: "{pack_output_path}"
