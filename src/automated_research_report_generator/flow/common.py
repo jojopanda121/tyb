@@ -296,10 +296,16 @@ def write_run_debug_manifest(
     pdf_file_path: str,
     run_cache_dir: str,
     evidence_registry_path: str = "",
+    registry_snapshot_markdown_path: str = "",
     page_index_file_path: str = "",
     document_metadata_file_path: str = "",
     final_report_markdown_path: str = "",
     final_report_pdf_path: str = "",
+    failed_stage: str = "",
+    failed_crew: str = "",
+    error_message: str = "",
+    blocked_packs: list[str] | None = None,
+    block_reason: str = "",
 ) -> str:
     """
     目的：给每次 run 生成一份可追踪的调试索引文件。
@@ -326,6 +332,9 @@ def write_run_debug_manifest(
         "run_artifact_dir": normalize_path(artifact_dir),
         "run_log_dir": normalize_path(log_dir),
         "evidence_registry_path": normalize_path(evidence_registry_path) if evidence_registry_path else "",
+        "registry_snapshot_markdown_path": (
+            normalize_path(registry_snapshot_markdown_path) if registry_snapshot_markdown_path else ""
+        ),
         "page_index_file_path": normalize_path(page_index_file_path) if page_index_file_path else "",
         "document_metadata_file_path": (
             normalize_path(document_metadata_file_path) if document_metadata_file_path else ""
@@ -334,6 +343,11 @@ def write_run_debug_manifest(
             normalize_path(final_report_markdown_path) if final_report_markdown_path else ""
         ),
         "final_report_pdf_path": normalize_path(final_report_pdf_path) if final_report_pdf_path else "",
+        "failed_stage": failed_stage,
+        "failed_crew": failed_crew,
+        "error_message": error_message,
+        "blocked_packs": blocked_packs or [],
+        "block_reason": block_reason,
         "run_debug_manifest_path": manifest_path,
         "preprocess_log_file_path": preprocess_log_file_path,
         "run_log_file_path": flow_log_file_path,

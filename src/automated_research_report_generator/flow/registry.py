@@ -705,8 +705,8 @@ def record_registry_review(
         "status": "updated" if has_changes else "no_change",
         "new_entry_ids": normalized_new_ids,
         "touched_entry_ids": normalized_touched_ids,
-        "summary": summary[:500],
-        "next_action": next_action[:300],
+        "summary": summary[:1200],
+        "next_action": next_action[:600],
     }
     append_registry_note(
         registry_path,

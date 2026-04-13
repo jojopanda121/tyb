@@ -65,7 +65,12 @@ def test_research_subcrews_have_yaml_agent_and_task_configs():
         agent_config = yaml.safe_load(agent_config_path.read_text(encoding="utf-8"))
         task_config = yaml.safe_load(task_config_path.read_text(encoding="utf-8"))
 
-        assert str(agent_config["manager_agent"]["role"]).strip() == "{pack_title}层级调度经理"
+        assert set(agent_config.keys()) == {
+            "search_fact_agent",
+            "extract_file_fact_agent",
+            "qa_check_agent",
+            "synthesizing_agent",
+        }
         assert str(agent_config["search_fact_agent"]["role"]).strip() == "{pack_title}外部搜索分析师"
         assert task_config["synthesize_and_output"]["output_file"] == "{pack_output_path}"
         assert task_config["search_facts"]["crew_name"] == crew_instance.crew_name
@@ -91,16 +96,16 @@ def test_research_subcrew_can_build_runtime_crew_from_yaml_configs():
 
     runtime_crew = BusinessCrew().crew()
 
-    assert runtime_crew.process in {Process.hierarchical, "hierarchical"}
+    assert runtime_crew.process in {Process.sequential, "sequential"}
     assert len(runtime_crew.agents) == 4
-    assert len(runtime_crew.tasks) == 4
+    assert len(runtime_crew.tasks) == 6
 
 
-def test_research_subcrew_runtime_uses_custom_manager_agent_for_dispatch():
+def test_research_subcrew_runtime_uses_sequential_dispatch_without_manager():
     """
-    目的：锁定 research sub-crew 已切换到 CrewAI custom manager agent 调度。
-    功能：检查运行时 crew 带有独立 manager agent，且 manager 不会被错误塞进 agents 列表。
-    实现逻辑：遍历 7 个 research sub-crew，分别构建 runtime crew 后断言 manager 接线和任务归属都正确。
+    目的：锁定 research sub-crew 已切换到顺序执行，不再依赖 manager agent 调度。
+    功能：检查运行时 crew 不再带独立 manager agent，且任务归属仍然正确。
+    实现逻辑：遍历 7 个 research sub-crew，分别构建 runtime crew 后断言调度边界和任务归属都正确。
     可调参数：当前无。
     默认参数及原因：默认覆盖全部 7 个 research sub-crew，原因是这条调度边界需要全局一致。
     """
@@ -108,15 +113,12 @@ def test_research_subcrew_runtime_uses_custom_manager_agent_for_dispatch():
     for crew_instance in _research_subcrew_instances():
         runtime_crew = crew_instance.crew()
 
-        assert runtime_crew.manager_agent is not None
-        assert runtime_crew.manager_llm is None
-        assert runtime_crew.manager_agent not in runtime_crew.agents
-        assert runtime_crew.manager_agent.allow_delegation is True
-        assert runtime_crew.manager_agent.tools == []
+        assert getattr(runtime_crew, "manager_agent", None) is None
+        assert getattr(runtime_crew, "manager_llm", None) is None
         assert "文件提取分析师" in str(runtime_crew.tasks[0].agent.role)
         assert "外部搜索分析师" in str(runtime_crew.tasks[1].agent.role)
-        assert "注册表检查员" in str(runtime_crew.tasks[2].agent.role)
-        assert "综合分析师" in str(runtime_crew.tasks[3].agent.role)
+        assert "注册表检查员" in str(runtime_crew.tasks[4].agent.role)
+        assert "综合分析师" in str(runtime_crew.tasks[5].agent.role)
 
 
 def test_research_registry_template_is_deterministic_and_covers_all_subcrews():
@@ -169,11 +171,11 @@ def test_research_subcrew_synthesize_prompts_enforce_registry_backfill_rules():
         assert "不得新建与已有 entry 内容重复的条目" in description
 
 
-def test_writeup_compile_prompt_requires_full_verbatim_section_insertion():
+def test_writeup_compile_prompt_is_non_destructive_preflight():
     """
-        目的：锁定 writeup 阶段的 compile_report prompt 必须按章节完整插入上游产物，而不是再次摘要改写。
-        功能：检查 `writeup_crew/config/tasks.yaml` 中的描述与 expected_output 同时声明“完整插入”与“不得改写”。
-        实现逻辑：直接读取 writeup crew 的 `tasks.yaml`，再断言 research、valuation、thesis 和 research 内部校验摘要占位符都以完整插入方式出现。
+        目的：锁定 writeup 阶段的 compile_report prompt 已退化为非破坏性确认，不再重新生成最终 Markdown。
+        功能：检查 `writeup_crew/config/tasks.yaml` 中明确声明“不要重写正文”，且 compile task 不再配置 `output_file`。
+        实现逻辑：直接读取 writeup crew 的 `tasks.yaml`，再断言 compile/export 两个任务都围绕既有最终 Markdown 路径工作。
         可调参数：当前无。
         默认参数及原因：默认只检查最关键的固定短语，原因是这能稳定覆盖行为边界，同时避免测试对整段 prompt 过度脆弱。
     """
@@ -188,17 +190,16 @@ def test_writeup_compile_prompt_requires_full_verbatim_section_insertion():
         / "tasks.yaml"
     )
     task_config = yaml.safe_load(task_config_path.read_text(encoding="utf-8"))
-    description = task_config["compile_report"]["description"]
-    expected_output = task_config["compile_report"]["expected_output"]
+    compile_task = task_config["compile_report"]
+    export_task = task_config["export_final_report"]
+    description = compile_task["description"]
 
-    assert "每个章节都必须完整插入对应占位符的全部输出内容" in description
-    assert "不得总结、压缩、重写或改写任何正文内容" in description
-    assert "7 个 research packs 的 `check_registry` 输出汇总" in description
-    assert "完整插入 {history_background_pack_text} 的全部输出内容" in expected_output
-    assert "完整插入 {valuation_pack_text} 的全部输出内容" in expected_output
-    assert "完整插入 {investment_thesis_text} 的全部输出内容" in expected_output
-    assert "完整插入 {final_qa_summary} 的全部输出内容" in expected_output
-    assert "## 10. Research 内部校验摘要与结论边界" in expected_output
+    assert "不要重新生成 Markdown 正文" in description
+    assert "不要覆盖或改写 {final_report_markdown_path}" in description
+    assert "registry snapshot" in description
+    assert "output_file" not in compile_task
+    assert compile_task["expected_output"] == "Markdown 已确认就绪，可直接导出 PDF。\n"
+    assert "markdown_path={final_report_markdown_path}" in export_task["description"]
 
 
 def test_research_subcrew_inputs_include_pack_metadata_and_upstream_pack_text(tmp_path):
@@ -239,7 +240,6 @@ def test_research_subcrew_inputs_include_pack_metadata_and_upstream_pack_text(tm
         pack_name=peer_info_crew.pack_name,
         pack_title=peer_info_crew.pack_title,
         output_path=(tmp_path / "peer_info_pack.md").as_posix(),
-        loop_reason="initial",
         qa_feedback="补同行可比性限制。",
     )
 
@@ -360,7 +360,7 @@ def test_research_subcrew_synthesize_output_skeleton_has_fixed_headings():
 
 def test_research_subcrew_temperature_hierarchy():
     """
-    目的：锁定温度分层：synthesis > search > extract，manager 和 qa 保持最低。
+    目的：锁定温度分层：synthesis > search > extract，qa 保持最低。
     功能：构建 runtime crew 后检查各 agent 的 LLM 温度设置。
     """
 
@@ -380,9 +380,6 @@ def test_research_subcrew_temperature_hierarchy():
             elif "注册表检查员" in role:
                 agent_temps["qa"] = a.llm.temperature
 
-        manager_temp = runtime_crew.manager_agent.llm.temperature
-
-        assert manager_temp <= 0.1, f"{crew_name} manager 温度应 <= 0.1, 实际 {manager_temp}"
         assert agent_temps.get("qa", 0) <= 0.1, f"{crew_name} qa 温度应 <= 0.1"
         assert agent_temps.get("extract", 0) <= agent_temps.get("search", 0), (
             f"{crew_name} extract 温度应 <= search 温度"

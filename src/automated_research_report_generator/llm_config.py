@@ -12,7 +12,7 @@ from crewai import LLM
 
 def get_heavy_llm(
     temperature: float = 0.5,
-    timeout: float | int | None = 10,
+    timeout: float | int | None = 45,
     max_retries: int | None = 5,
 ) -> LLM:
     """
@@ -20,7 +20,7 @@ def get_heavy_llm(
     模块功能：按当前项目固定的 OpenRouter 配置返回一个 `LLM` 实例。
     实现逻辑：直接把模型、API Base、API Key 和采样参数写入 `LLM(...)`。
     可调参数：`temperature` 常用 0-1；`timeout` 可为正数或 `None`；`max_retries` 可为非负整数或 `None`。
-    默认参数及原因：默认 `0.5 / 10 / 5`，原因是在稳定性、响应速度和简单容错之间取平衡。
+    默认参数及原因：默认 `0.5 / 45 / 5`，原因是当前 research 与 thesis 阶段经常需要跨工具、跨上下文长响应，10 秒超时过短。
     """
     return LLM(
         api_base="https://openrouter.ai/api/v1",

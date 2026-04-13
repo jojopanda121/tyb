@@ -41,7 +41,7 @@
 当前统一输入边界：
 
 - `_base_inputs()` 提供基础文档上下文
-- Flow 额外注入 `pack_name`、`pack_title`、`owner_crew`、`pack_output_path`、`loop_reason`
+- Flow 额外注入 `pack_name`、`pack_title`、`owner_crew`、`pack_output_path`
 - Flow 按 crew 需要补充上游 pack 文本
 
 当前统一行为边界：

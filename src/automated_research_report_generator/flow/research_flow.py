@@ -7,6 +7,7 @@ from __future__ import annotations
 # 默认参数及原因：三个阶段默认各允许 1 次自动返工，原因是总运行次数固定为 2 次。
 
 import json
+import re
 from pathlib import Path
 
 from crewai.flow.flow import Flow, listen, router, start
@@ -39,7 +40,7 @@ from automated_research_report_generator.crews.risk_crew.risk_crew import RiskCr
 from automated_research_report_generator.crews.valuation_crew.valuation_crew import ValuationCrew
 from automated_research_report_generator.crews.writeup_crew.writeup_crew import WriteupCrew
 from automated_research_report_generator.flow.document_metadata import resolve_pdf_document_metadata_payload
-from automated_research_report_generator.flow.models import ResearchFlowState
+from automated_research_report_generator.flow.models import ResearchFlowState, ResearchRegistryCheckResult
 from automated_research_report_generator.flow.pdf_indexing import (
     ensure_pdf_page_index,
     reset_pdf_preprocessing_runtime_state,
@@ -64,6 +65,12 @@ from automated_research_report_generator.tools.pdf_page_tools import activate_pa
 RESEARCH_STAGE_COMPLETED_EVENT = "research_stage_completed"
 VALUATION_STAGE_COMPLETED_NO_GATE_EVENT = "valuation_stage_completed_no_gate"
 THESIS_STAGE_COMPLETED_NO_GATE_EVENT = "thesis_stage_completed_no_gate"
+STAGE_FAILURE_CHECKPOINT_CODES = {
+    "research": "cp03_research_failed",
+    "valuation": "cp04_valuation_failed",
+    "thesis": "cp05_thesis_failed",
+    "writeup": "cp06_writeup_failed",
+}
 RESEARCH_SUB_CREW_SPECS = [
     {
         "pack_name": "history_background_pack",
@@ -199,6 +206,8 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         self.state.document_metadata_file_path = document_metadata_path
         self.state.page_index_file_path = page_index_path
         self.state.evidence_registry_path = registry_path.as_posix()
+        self.state.registry_snapshot_markdown_path = registry_path.with_name("registry_snapshot.md").as_posix()
+        self._clear_run_outcome()
         self._write_manifest_from_state("prepared")
         self._write_checkpoint(
             "cp00_prepared",
@@ -263,26 +272,28 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
     def run_research_crew(self):
         """
         目的：触发研究阶段的首轮执行。
-        功能：调用 `_run_research_stage("initial")`，顺序执行 7 个 research sub-crew。
+        功能：调用 `_run_research_stage()`，顺序执行 7 个 research sub-crew。
         实现逻辑：研究阶段完成后直接返回 `RESEARCH_STAGE_COMPLETED_EVENT`，供估值阶段继续接力。
         可调参数：当前无额外参数。
-        默认参数及原因：固定使用 `initial`，原因是保留阶段语义而不再引入 research 外部返工。
+        默认参数及原因：research 阶段固定单轮执行，原因是 research 外部 QA gate 已移除。
         """
 
-        self._run_research_stage("initial")
+        self.state.blocked_packs = []
+        self.state.block_reason = ""
+        self._run_research_stage()
         return RESEARCH_STAGE_COMPLETED_EVENT
 
     @router(RESEARCH_STAGE_COMPLETED_EVENT)
     def run_valuation_crew(self):
         """
         目的：触发估值阶段的首轮执行。
-        功能：调用 `_run_valuation_stage("initial")`，并直接进入 thesis 阶段。
+        功能：调用 `_run_valuation_stage()`，并直接进入 thesis 阶段。
         实现逻辑：research 阶段完成后直接进入估值阶段，整个链路不再等待 research 外部 QA gate。
         可调参数：当前无额外参数。
-        默认参数及原因：固定使用 `initial`，原因是日志里需要区分首轮和返工。
+        默认参数及原因：估值阶段固定单轮执行，原因是当前不再保留外部返工分支。
         """
 
-        self._run_valuation_stage("initial")
+        self._run_valuation_stage()
         return VALUATION_STAGE_COMPLETED_NO_GATE_EVENT
 
     def _run_thesis_stage(self) -> None:
@@ -318,7 +329,19 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             InvestmentThesisCrew(),
             self._crew_log_path("investment_thesis_crew"),
         )
-        thesis_crew.crew().kickoff(inputs=inputs)
+        try:
+            thesis_crew.crew().kickoff(inputs=inputs)
+        except Exception as exc:
+            self._record_stage_failure(
+                stage="thesis",
+                crew_name="investment_thesis_crew",
+                error=exc,
+                checkpoint_payload={
+                    "thesis_output_dir": thesis_dir.as_posix(),
+                    "iteration": iteration_number,
+                },
+            )
+            raise
         self.state.investment_thesis_path = (thesis_dir / "01_investment_thesis.md").as_posix()
         self.state.diligence_questions_path = (thesis_dir / "02_diligence_questions.md").as_posix()
         self._log_flow(
@@ -351,43 +374,47 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
     def publish_if_passed(self):
         """
         目的：在 thesis 阶段完成后生成最终报告。
-        功能：汇总前序产物，运行 writeup crew，输出 Markdown 与 PDF。
-        实现逻辑：把各阶段文本和 research 内部校验摘要注入 writeup 输入，执行后更新 manifest。
-        可调参数：最终报告路径、阶段产物文本和内部校验摘要。
+        功能：先确定性拼装最终 Markdown，再运行 writeup crew 做非破坏性确认与 PDF 导出。
+        实现逻辑：先把 thesis、research、valuation、内部校验摘要和 registry snapshot 汇编成最终 Markdown，再把稳定路径交给 writeup crew。
+        可调参数：最终报告路径、PDF 输出路径和 registry snapshot 路径。
         默认参数及原因：默认复用 state 中已经确定的路径，原因是保证产物位置稳定。
         """
 
         self._log_flow("publish_if_passed started")
-        inputs = self._base_inputs() | {
-            "history_background_pack_text": self._read(self.state.history_background_pack_path),
-            "industry_pack_text": self._read(self.state.industry_pack_path),
-            "business_pack_text": self._read(self.state.business_pack_path),
-            "peer_info_pack_text": self._read(self.state.peer_info_pack_path),
-            "finance_pack_text": self._read(self.state.finance_pack_path),
-            "operating_metrics_pack_text": self._read(self.state.operating_metrics_pack_path),
-            "risk_pack_text": self._read(self.state.risk_pack_path),
-            "peers_pack_text": self._read(self.state.peers_pack_path),
-            "intrinsic_value_pack_text": self._read(self.state.intrinsic_value_pack_path),
-            "valuation_pack_text": self._read(self.state.valuation_pack_path),
-            "investment_thesis_text": self._read(self.state.investment_thesis_path),
-            "diligence_questions_text": self._read(self.state.diligence_questions_path),
-            "final_qa_summary": self._internal_research_review_summary_text(),
-            "final_report_markdown_path": self.state.final_report_markdown_path,
-            "final_report_pdf_path": self.state.final_report_pdf_path,
-        }
-        self._prepare_tool_context()
-        writeup_crew = self._configure_crew_log(WriteupCrew(), self._crew_log_path("writeup_crew"))
-        writeup_crew.crew().kickoff(inputs=inputs)
+        try:
+            self._write_final_report_markdown()
+            inputs = self._base_inputs() | {
+                "registry_snapshot_markdown_path": self._ensure_registry_snapshot_markdown_path(),
+                "final_report_markdown_path": self.state.final_report_markdown_path,
+                "final_report_pdf_path": self.state.final_report_pdf_path,
+            }
+            self._prepare_tool_context()
+            writeup_crew = self._configure_crew_log(WriteupCrew(), self._crew_log_path("writeup_crew"))
+            writeup_crew.crew().kickoff(inputs=inputs)
+        except Exception as exc:
+            self._record_stage_failure(
+                stage="writeup",
+                crew_name="writeup_crew",
+                error=exc,
+                checkpoint_payload={
+                    "final_report_markdown_path": self.state.final_report_markdown_path,
+                    "final_report_pdf_path": self.state.final_report_pdf_path,
+                },
+            )
+            raise
+        self._clear_run_outcome()
         self._write_manifest_from_state("completed")
         self._write_checkpoint(
             "cp06_writeup",
             {
+                "registry_snapshot_markdown_path": self.state.registry_snapshot_markdown_path,
                 "final_report_markdown_path": self.state.final_report_markdown_path,
                 "final_report_pdf_path": self.state.final_report_pdf_path,
             },
         )
         self._log_flow(
             "publish_if_passed completed | "
+            f"registry_snapshot_markdown_path={self.state.registry_snapshot_markdown_path} | "
             f"final_report_markdown_path={self.state.final_report_markdown_path} | "
             f"final_report_pdf_path={self.state.final_report_pdf_path}"
         )
@@ -396,6 +423,206 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             "final_report_pdf_path": self.state.final_report_pdf_path,
             "run_debug_manifest_path": self.state.run_debug_manifest_path,
         }
+
+    def _ensure_registry_snapshot_markdown_path(self) -> str:
+        """
+        目的：为最终报告与 manifest 提供稳定的 registry Markdown 快照路径。
+        功能：优先复用 state 中已知路径；若缺失，则从 `evidence_registry_path` 推导同目录下的 `registry_snapshot.md`。
+        实现逻辑：仅在 state 为空且 registry JSON 路径存在时做一次确定性推导，并把结果写回 state。
+        可调参数：当前无显式参数。
+        默认参数及原因：默认沿用 registry JSON 同目录固定文件名，原因是 registry 写盘时一直使用这个稳定入口。
+        """
+
+        if self.state.registry_snapshot_markdown_path:
+            return self.state.registry_snapshot_markdown_path
+        if not self.state.evidence_registry_path:
+            return ""
+        self.state.registry_snapshot_markdown_path = (
+            Path(self.state.evidence_registry_path).expanduser().resolve().with_name("registry_snapshot.md").as_posix()
+        )
+        return self.state.registry_snapshot_markdown_path
+
+    def _demote_markdown_headings(self, text: str, *, level_shift: int = 2) -> str:
+        """
+        目的：把上游 Markdown 安全嵌入最终报告，而不破坏其正文内容。
+        功能：仅对标题层级做整体下调，避免上游 pack 的 `#` 标题冲掉最终报告骨架。
+        实现逻辑：逐行扫描并跳过代码块；遇到 ATX 标题时统一增加层级，正文、表格和列表保持原样。
+        可调参数：`text` 和 `level_shift`。
+        默认参数及原因：默认下调 2 级，原因是最终报告已占用 `#` 和 `##` 两层主骨架。
+        """
+
+        lines: list[str] = []
+        in_fenced_block = False
+        for line in text.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("```"):
+                in_fenced_block = not in_fenced_block
+                lines.append(line.rstrip())
+                continue
+            if not in_fenced_block and stripped.startswith("#"):
+                prefix_length = len(stripped) - len(stripped.lstrip("#"))
+                if 1 <= prefix_length <= 6:
+                    heading_level = min(prefix_length + level_shift, 6)
+                    heading_text = stripped[prefix_length:].lstrip()
+                    leading_whitespace = line[: len(line) - len(stripped)]
+                    if heading_text:
+                        lines.append(f"{leading_whitespace}{'#' * heading_level} {heading_text}")
+                    else:
+                        lines.append(f"{leading_whitespace}{'#' * heading_level}")
+                    continue
+            lines.append(line.rstrip())
+        return "\n".join(lines).strip()
+
+    def _render_report_source_markdown(self, *, label: str, text: str, source_path: str) -> str:
+        """
+        目的：把单份上游材料转换成可直接嵌入最终报告的 Markdown 片段。
+        功能：有正文时仅做标题降级；缺失时输出明确占位，避免最终报告静默吞掉整段材料。
+        实现逻辑：先判断文本是否为空，再分别走“降级嵌入”或“缺失占位”两条最小分支。
+        可调参数：材料标签、正文文本和源文件路径。
+        默认参数及原因：缺失时保留期望路径，原因是排查上游断链时需要立即知道缺的是哪一份文件。
+        """
+
+        normalized_text = text.strip()
+        if normalized_text:
+            return self._demote_markdown_headings(normalized_text)
+        expected_path = source_path or "未设置"
+        return f"> 上游材料缺失：{label}。期望路径：{expected_path}"
+
+    def _build_final_report_markdown(self) -> str:
+        """
+        目的：用确定性方式生成最终报告 Markdown，避免 writeup 阶段再次摘要或改写。
+        功能：按固定章节顺序拼接 thesis、7 个 research packs、3 个 valuation packs、内部校验摘要和 registry snapshot 附录。
+        实现逻辑：先组装主文章节与估值子章节，再追加 registry appendix；每份上游材料只做标题降级和基础分隔整理。
+        可调参数：各阶段产物路径、内部校验摘要和 registry snapshot 路径。
+        默认参数及原因：缺失产物时写明占位说明，原因是最终报告不能靠静默省略掩盖链路断点。
+        """
+
+        report_sections: list[tuple[str, list[tuple[str | None, str, str, str]]]] = [
+            (
+                "1. 投资逻辑",
+                [(None, "投资逻辑", self._read(self.state.investment_thesis_path), self.state.investment_thesis_path)],
+            ),
+            (
+                "2. 尽调问题",
+                [(None, "尽调问题", self._read(self.state.diligence_questions_path), self.state.diligence_questions_path)],
+            ),
+            (
+                "3. 公司历史及股东",
+                [
+                    (
+                        None,
+                        "历史与背景分析包",
+                        self._read(self.state.history_background_pack_path),
+                        self.state.history_background_pack_path,
+                    )
+                ],
+            ),
+            (
+                "4. 行业分析",
+                [(None, "行业分析包", self._read(self.state.industry_pack_path), self.state.industry_pack_path)],
+            ),
+            (
+                "5. 业务分析",
+                [(None, "业务分析包", self._read(self.state.business_pack_path), self.state.business_pack_path)],
+            ),
+            (
+                "6. 运营指标分析",
+                [
+                    (
+                        None,
+                        "运营指标分析包",
+                        self._read(self.state.operating_metrics_pack_path),
+                        self.state.operating_metrics_pack_path,
+                    )
+                ],
+            ),
+            (
+                "7. 财务分析",
+                [(None, "财务分析包", self._read(self.state.finance_pack_path), self.state.finance_pack_path)],
+            ),
+            (
+                "8. 风险分析",
+                [(None, "风险分析包", self._read(self.state.risk_pack_path), self.state.risk_pack_path)],
+            ),
+            (
+                "9. 可比公司情况",
+                [(None, "同行信息分析包", self._read(self.state.peer_info_pack_path), self.state.peer_info_pack_path)],
+            ),
+            (
+                "10. 综合估值",
+                [
+                    (
+                        "### 10.1 可比公司分析包",
+                        "可比公司分析包",
+                        self._read(self.state.peers_pack_path),
+                        self.state.peers_pack_path,
+                    ),
+                    (
+                        "### 10.2 内在价值分析包",
+                        "内在价值分析包",
+                        self._read(self.state.intrinsic_value_pack_path),
+                        self.state.intrinsic_value_pack_path,
+                    ),
+                    (
+                        "### 10.3 综合估值分析包",
+                        "综合估值分析包",
+                        self._read(self.state.valuation_pack_path),
+                        self.state.valuation_pack_path,
+                    ),
+                ],
+            ),
+            (
+                "11. Research 内部校验摘要与结论边界",
+                [
+                    (
+                        None,
+                        "Research 内部校验摘要",
+                        self._internal_research_review_summary_text(),
+                        self.state.research_internal_review_summary_path,
+                    )
+                ],
+            ),
+        ]
+
+        lines = [f"# {self.state.company_name} 研究报告"]
+        for section_title, blocks in report_sections:
+            lines.extend(["", f"## {section_title}", ""])
+            for block_index, (wrapper_heading, label, text, source_path) in enumerate(blocks):
+                if wrapper_heading:
+                    lines.extend([wrapper_heading, ""])
+                lines.extend(self._render_report_source_markdown(label=label, text=text, source_path=source_path).splitlines())
+                if block_index != len(blocks) - 1:
+                    lines.extend(["", "---", ""])
+
+        registry_snapshot_path = self._ensure_registry_snapshot_markdown_path()
+        lines.extend(
+            [
+                "",
+                "## 附录：Registry Snapshot",
+                "",
+                *self._render_report_source_markdown(
+                    label="Registry Snapshot",
+                    text=self._read(registry_snapshot_path),
+                    source_path=registry_snapshot_path,
+                ).splitlines(),
+            ]
+        )
+        return "\n".join(lines).strip() + "\n"
+
+    def _write_final_report_markdown(self) -> str:
+        """
+        目的：把确定性拼装好的最终报告落盘到稳定路径。
+        功能：生成最终 Markdown 正文、确保目录存在并写入 `final_report_markdown_path`。
+        实现逻辑：先调用 `_build_final_report_markdown()` 生成正文，再统一按 UTF-8 覆盖写入目标文件。
+        可调参数：最终报告输出路径。
+        默认参数及原因：默认总是覆盖当前 run 的最终 Markdown，原因是 writeup 导出必须基于这份最新确定稿。
+        """
+
+        final_report_path = Path(self.state.final_report_markdown_path).expanduser().resolve()
+        final_report_path.parent.mkdir(parents=True, exist_ok=True)
+        final_report_path.write_text(self._build_final_report_markdown(), encoding="utf-8")
+        self.state.final_report_markdown_path = final_report_path.as_posix()
+        return self.state.final_report_markdown_path
 
     def _base_inputs(self) -> dict[str, str]:
         """
@@ -523,15 +750,14 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         pack_name: str,
         pack_title: str,
         output_path: str,
-        loop_reason: str,
         qa_feedback: str = "",
     ) -> dict[str, str]:
         """
         目的：为单个 research sub-crew 生成最小且真实的 kickoff 输入。
         功能：在公共输入之外补充当前 pack 的配置占位符、输出路径、内部校验占位输入和依赖 pack 文本。
         实现逻辑：先取 `_base_inputs()`，再补当前 crew 的 pack 元数据，最后按 pack 名补充必要的上游包文本。
-        可调参数：crew 实例、pack 名、pack 标题、输出路径、loop_reason 和 qa_feedback。
-        默认参数及原因：`qa_feedback` 默认空串，原因是 research 外部 gate 已移除，但 YAML 仍需要稳定占位符；其他输入只补与当前 pack 真正相关的上游文本，避免 prompt 无谓膨胀。
+        可调参数：crew 实例、pack 名、pack 标题、输出路径和 qa_feedback。
+        默认参数及原因：`qa_feedback` 默认空串，原因是保留内部返工提示位；其他输入只补与当前 pack 真正相关的上游文本，避免 prompt 无谓膨胀。
         """
 
         inputs = self._base_inputs() | {
@@ -546,7 +772,6 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             "synthesize_guidance": getattr(crew_instance, "synthesize_guidance", ""),
             "output_skeleton": getattr(crew_instance, "output_skeleton", ""),
             "pack_output_path": output_path,
-            "loop_reason": loop_reason,
             "qa_feedback": qa_feedback,
         }
         if pack_name == "peer_info_pack":
@@ -556,15 +781,12 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             inputs["peer_info_pack_text"] = self._read(self.state.peer_info_pack_path)
         return inputs
 
-    def _run_research_stage(
-        self,
-        loop_reason: str,
-    ):
+    def _run_research_stage(self):
         """
         目的：封装研究阶段的实际执行逻辑。
         功能：顺序运行 7 个 research sub-crew，并把每个 crew 的 `check_registry` 输出汇总成内部校验摘要。
         实现逻辑：创建本轮 research 输出目录，循环调度 pack 对应的子 crew，记录 pack 产物，再额外生成 `08_research_internal_registry_checks.md`。
-        可调参数：`loop_reason`。
+        可调参数：当前无额外参数。
         默认参数及原因：产物默认写入 `research/iter_01`，原因是 research 外部 QA gate 已移除，当前设计只保留固定单轮执行。
         """
 
@@ -572,42 +794,86 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         research_dir = self._stage_iteration_dir("research")
         internal_review_memos: list[dict[str, str]] = []
         self._log_flow(
-            f"_run_research_stage started | iteration={iteration_number} | loop_reason={loop_reason} | "
+            f"_run_research_stage started | iteration={iteration_number} | "
             f"research_output_dir={research_dir.as_posix()}"
         )
+        self._clear_run_outcome()
         self._prepare_tool_context()
         for spec in RESEARCH_SUB_CREW_SPECS:
             pack_name = spec["pack_name"]
             output_path = (research_dir / spec["output_file_name"]).as_posix()
             crew_instance = self._configure_crew_log(spec["crew_cls"](), self._crew_log_path(spec["crew_name"]))
-            result = crew_instance.crew().kickoff(
-                inputs=self._research_subcrew_inputs(
-                    crew_instance=crew_instance,
-                    pack_name=pack_name,
-                    pack_title=spec["title"],
-                    output_path=output_path,
-                    loop_reason=loop_reason,
+            try:
+                result = crew_instance.crew().kickoff(
+                    inputs=self._research_subcrew_inputs(
+                        crew_instance=crew_instance,
+                        pack_name=pack_name,
+                        pack_title=spec["title"],
+                        output_path=output_path,
+                    )
                 )
-            )
-            setattr(self.state, spec["state_attr"], output_path)
-            self._register_pack_output(output_path, pack_name, spec["title"])
-            internal_review_memos.append(
-                {
-                    "pack_name": pack_name,
-                    "title": spec["title"],
-                    "memo": self._extract_check_registry_memo(result),
-                }
-            )
-            self._write_checkpoint(
-                spec["checkpoint_code"],
-                {
-                    "pack_name": pack_name,
-                    "output_path": output_path,
-                    "loop_reason": loop_reason,
-                },
-            )
+                setattr(self.state, spec["state_attr"], output_path)
+                self._register_pack_output(output_path, pack_name, spec["title"])
+                structured_check_result = self._extract_check_registry_result(result)
+                check_memo = self._extract_check_registry_memo(result)
+                has_check_output = "true" if structured_check_result is not None or check_memo.strip() else "false"
+                if structured_check_result is not None:
+                    internal_review_memos.append(
+                        {
+                            "pack_name": pack_name,
+                            "title": spec["title"],
+                            "memo": structured_check_result.summary.strip(),
+                            "status": structured_check_result.overall_status,
+                            "rendered_summary": self._render_check_registry_result_markdown(
+                                structured_check_result
+                            ),
+                            "has_output": has_check_output,
+                        }
+                    )
+                else:
+                    fallback_status = self._parse_research_review_status(check_memo)
+                    self._log_flow(
+                        "_run_research_stage warning | "
+                        f"pack_name={pack_name} | "
+                        "check_registry structured output missing, fallback to text parsing | "
+                        f"fallback_status={fallback_status}"
+                    )
+                    internal_review_memos.append(
+                        {
+                            "pack_name": pack_name,
+                            "title": spec["title"],
+                            "memo": check_memo,
+                            "status": fallback_status,
+                            "rendered_summary": (
+                                check_memo.strip()
+                                if check_memo.strip()
+                                else "本 pack 未返回 `check_registry` 输出。"
+                            ),
+                            "has_output": has_check_output,
+                        }
+                    )
+                self._write_checkpoint(
+                    spec["checkpoint_code"],
+                    {
+                        "pack_name": pack_name,
+                        "output_path": output_path,
+                    },
+                )
+            except Exception as exc:
+                self._record_stage_failure(
+                    stage="research",
+                    crew_name=spec["crew_name"],
+                    error=exc,
+                    checkpoint_payload={
+                        "pack_name": pack_name,
+                        "output_path": output_path,
+                    },
+                )
+                raise
         summary_path = self._write_research_internal_review_summary(research_dir, internal_review_memos)
-        missing_pack_names = [item["pack_name"] for item in internal_review_memos if not item["memo"]]
+        missing_pack_names = [
+            item["pack_name"] for item in internal_review_memos if item.get("has_output") != "true"
+        ]
         self._write_checkpoint(
             "cp03_research_internal_checks",
             {
@@ -616,6 +882,7 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
                 "missing_packs": missing_pack_names,
             },
         )
+        not_ready_packs = self._collect_not_ready_research_packs(internal_review_memos)
         self._log_flow(
             "_run_research_stage completed | "
             f"history_background_pack_path={self.state.history_background_pack_path} | "
@@ -625,17 +892,18 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             f"finance_pack_path={self.state.finance_pack_path} | "
             f"operating_metrics_pack_path={self.state.operating_metrics_pack_path} | "
             f"risk_pack_path={self.state.risk_pack_path} | "
+            f"not_ready_packs={not_ready_packs} | "
             f"research_internal_review_summary_path={summary_path}"
         )
         return summary_path
 
-    def _extract_check_registry_memo(self, crew_result) -> str:
+    def _find_check_registry_task_output(self, crew_result):
         """
-        目的：从 research sub-crew 的执行结果里提取 `check_registry` 任务输出。
-        功能：优先按任务名识别 `check_registry`，必要时回退到固定任务顺序中的第 5 个结果。
-        实现逻辑：遍历 `tasks_output` 查找显式任务名；如果没有可用名字，再按当前 6-task 固定链路取索引 4。
+        目的：在 sub-crew 执行结果里稳定定位 `check_registry` 任务输出对象。
+        功能：优先按任务名查找，必要时回退到当前 6-task 固定链路中的第 5 个任务结果。
+        实现逻辑：遍历 `tasks_output` 的显式任务名字段；缺失时按固定顺序兜底取索引 4。
         可调参数：`crew_result`。
-        默认参数及原因：找不到输出时返回空串，原因是摘要文件需要明确保留缺口，而不是抛异常中断整轮 research。
+        默认参数及原因：找不到时返回 `None`，原因是 research 汇总阶段需要显式暴露缺口，而不是抛异常中断。
         """
 
         tasks_output = getattr(crew_result, "tasks_output", None) or []
@@ -646,9 +914,92 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
                 getattr(getattr(task_output, "task", None), "name", None),
             ]
             if any(candidate == "check_registry" for candidate in task_name_candidates if isinstance(candidate, str)):
-                return self._task_output_text(task_output)
+                return task_output
         if len(tasks_output) >= 5:
-            return self._task_output_text(tasks_output[4])
+            return tasks_output[4]
+        return None
+
+    def _extract_check_registry_result(self, crew_result) -> ResearchRegistryCheckResult | None:
+        """
+        目的：优先提取 `check_registry` 的结构化 QA 结果。
+        功能：从 CrewAI 的 `pydantic` 或 `json_dict` 结果中恢复 `ResearchRegistryCheckResult`。
+        实现逻辑：先定位 `check_registry` 任务输出，再优先读取 `.pydantic`，失败时尝试校验 `.json_dict`。
+        可调参数：`crew_result`。
+        默认参数及原因：结构化结果不可用时返回 `None`，原因是当前设计要求 fail-open 降级到文本解析。
+        """
+
+        task_output = self._find_check_registry_task_output(crew_result)
+        if task_output is None:
+            return None
+
+        pydantic_payload = getattr(task_output, "pydantic", None)
+        if pydantic_payload is not None:
+            if isinstance(pydantic_payload, ResearchRegistryCheckResult):
+                return pydantic_payload
+            try:
+                normalized_payload = (
+                    pydantic_payload.model_dump()
+                    if hasattr(pydantic_payload, "model_dump")
+                    else pydantic_payload
+                )
+                return ResearchRegistryCheckResult.model_validate(normalized_payload)
+            except Exception:
+                pass
+
+        json_dict = getattr(task_output, "json_dict", None)
+        if isinstance(json_dict, dict):
+            try:
+                return ResearchRegistryCheckResult.model_validate(json_dict)
+            except Exception:
+                return None
+        return None
+
+    def _render_check_registry_result_markdown(self, check_result: ResearchRegistryCheckResult) -> str:
+        """
+        目的：把结构化 QA 结果稳定渲染成 research 内部校验摘要里的 Markdown 片段。
+        功能：输出整体状态、回退阶段、摘要、问题列表和修订建议，避免直接 dump 原始模型对象。
+        实现逻辑：按固定顺序拼接字段；列表为空时显式写“无”，降低摘要文件的阅读噪音。
+        可调参数：`check_result`。
+        默认参数及原因：摘要为空时写“未提供 QA 摘要。”，原因是要明确暴露模型输出缺口而不是留空。
+        """
+
+        lines = [
+            f"- 整体就绪状态：`{check_result.overall_status}`",
+            f"- 建议回退阶段：`{check_result.recommended_rework_stage}`",
+            "",
+            "摘要：",
+            check_result.summary.strip() if check_result.summary.strip() else "未提供 QA 摘要。",
+            "",
+            "未通过条目：",
+        ]
+        if check_result.issues:
+            lines.extend(
+                [
+                    f"- `{issue.entry_id}` | `{issue.issue_type}` | {issue.detail}"
+                    for issue in check_result.issues
+                ]
+            )
+        else:
+            lines.append("- 无")
+        lines.extend(["", "修订建议："])
+        if check_result.revision_suggestions:
+            lines.extend([f"- {suggestion}" for suggestion in check_result.revision_suggestions])
+        else:
+            lines.append("- 无")
+        return "\n".join(lines).strip()
+
+    def _extract_check_registry_memo(self, crew_result) -> str:
+        """
+        目的：从 research sub-crew 的执行结果里提取 `check_registry` 任务输出。
+        功能：优先按任务名识别 `check_registry`，必要时回退到固定任务顺序中的第 5 个结果。
+        实现逻辑：遍历 `tasks_output` 查找显式任务名；如果没有可用名字，再按当前 6-task 固定链路取索引 4。
+        可调参数：`crew_result`。
+        默认参数及原因：找不到输出时返回空串，原因是摘要文件需要明确保留缺口，而不是抛异常中断整轮 research。
+        """
+
+        task_output = self._find_check_registry_task_output(crew_result)
+        if task_output is not None:
+            return self._task_output_text(task_output)
         return ""
 
     def _task_output_text(self, task_output) -> str:
@@ -703,12 +1054,15 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             "本文件汇总 7 个 research packs 在 `check_registry` 任务中的内部校验输出，用于 writeup 的结论边界章节。",
         ]
         for item in review_memos:
+            rendered_summary = item.get("rendered_summary", "").strip()
             lines.extend(
                 [
                     "",
                     f"## {item['title']}（{item['pack_name']}）",
                     "",
-                    item["memo"].strip() if item["memo"].strip() else "本 pack 未返回 `check_registry` 输出。",
+                    rendered_summary
+                    if rendered_summary
+                    else (item["memo"].strip() if item["memo"].strip() else "本 pack 未返回 `check_registry` 输出。"),
                 ]
             )
         if len(lines) == 3:
@@ -731,34 +1085,149 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             return summary_text
         return "# Research 内部校验摘要\n\n本轮未生成内部校验摘要。\n"
 
-    def _run_valuation_stage(self, loop_reason: str):
+    def _clear_run_outcome(self) -> None:
+        """
+        目的：在写入新阶段状态前清空上一次失败或阻断留下的运行结果字段。
+        功能：统一重置 `failed_*`、`error_message`、`blocked_packs` 和 `block_reason`。
+        实现逻辑：直接回写 state 上的结果字段，不触碰其他业务路径或中间产物状态。
+        可调参数：当前无显式参数。
+        默认参数及原因：每次进入新的主阶段前都允许覆盖旧结果，原因是 manifest 应只表达当前 run 的最新结论。
+        """
+
+        self.state.failed_stage = ""
+        self.state.failed_crew = ""
+        self.state.error_message = ""
+        self.state.blocked_packs = []
+        self.state.block_reason = ""
+
+    def _checkpoint_code_for_stage_failure(self, stage: str) -> str:
+        """
+        目的：给不同阶段的失败记录生成稳定 checkpoint 编号。
+        功能：把 research / valuation / thesis / writeup 的失败统一映射到对应编号。
+        实现逻辑：优先查固定映射，缺省时回退到通用失败编号。
+        可调参数：`stage`。
+        默认参数及原因：未知阶段回退 `cp99_failed`，原因是异常排查不能因为编号缺失而再次失败。
+        """
+
+        return STAGE_FAILURE_CHECKPOINT_CODES.get(stage, "cp99_failed")
+
+    def _record_stage_failure(
+        self,
+        *,
+        stage: str,
+        crew_name: str,
+        error: Exception,
+        checkpoint_payload: dict[str, object] | None = None,
+    ) -> None:
+        """
+        目的：在关键阶段失败时先把 manifest 与 checkpoint 落盘，再把异常继续抛出。
+        功能：记录失败阶段、失败 crew、错误信息，并生成对应的失败 checkpoint。
+        实现逻辑：先更新 state，再尽力写 manifest 与 checkpoint；任何二次记录失败都不覆盖原始业务异常。
+        可调参数：阶段名、crew 名、原始异常和附加 checkpoint 载荷。
+        默认参数及原因：checkpoint 载荷默认空字典，原因是不同阶段需要补充的上下文不一致。
+        """
+
+        self.state.failed_stage = stage
+        self.state.failed_crew = crew_name
+        self.state.error_message = str(error)
+        self.state.blocked_packs = []
+        self.state.block_reason = ""
+        try:
+            self._write_manifest_from_state("failed")
+        except Exception:
+            pass
+        try:
+            self._write_checkpoint(
+                self._checkpoint_code_for_stage_failure(stage),
+                {
+                    "stage": stage,
+                    "crew_name": crew_name,
+                    "error_message": str(error),
+                    **(checkpoint_payload or {}),
+                },
+            )
+        except Exception:
+            pass
+        self._log_flow(
+            f"{stage} stage failed | crew_name={crew_name} | error_message={str(error)}"
+        )
+
+    def _parse_research_review_status(self, memo: str) -> str:
+        """
+        目的：从 research 内部校验 memo 中提取最小可用的就绪状态。
+        功能：只识别当前运行日志里已经出现的 `Ready` / `**Ready**` / `Ready (就绪)` / `Not Ready`。
+        实现逻辑：先检查 `Not Ready`，再检查几种 Ready 变体；命不中时返回 `unknown`。
+        可调参数：`memo`。
+        默认参数及原因：只支持已出现的固定写法，原因是本轮只做最小稳定性修复，不引入宽泛文本分类。
+        """
+
+        normalized_memo = memo.strip()
+        if re.search(r"Not Ready", normalized_memo, flags=re.IGNORECASE):
+            return "not_ready"
+        if "Ready (就绪)" in normalized_memo:
+            return "ready"
+        if "**Ready**" in normalized_memo:
+            return "ready"
+        if "整体就绪状态：Ready" in normalized_memo or "整体就绪状态: Ready" in normalized_memo:
+            return "ready"
+        if re.search(r"\bReady\b", normalized_memo, flags=re.IGNORECASE):
+            return "ready"
+        return "unknown"
+
+    def _collect_not_ready_research_packs(self, review_memos: list[dict[str, str]]) -> list[str]:
+        """
+        目的：把 research 阶段内部校验中明确标记为 `Not Ready` 的 pack 收敛出来。
+        功能：返回需要写入日志和摘要边界的 advisory pack 名列表。
+        实现逻辑：逐条解析 memo，只把显式 `Not Ready` 的 pack 记为证据不足项，其他未知写法暂不扩大解释。
+        可调参数：`review_memos`。
+        默认参数及原因：只识别显式 `Not Ready`，原因是当前先对齐已经出现过的稳定输出写法。
+        """
+
+        return [
+            item["pack_name"]
+            for item in review_memos
+            if item.get("status") == "not_ready"
+        ]
+
+    def _run_valuation_stage(self):
         """
         目的：封装估值阶段的实际执行逻辑。
         功能：运行 valuation crew，并登记三份估值 pack。
         实现逻辑：创建估值输出目录，注入 peer_info、财务、运营指标和风险文本，执行 crew 后回写产物路径。
-        可调参数：`loop_reason`。
+        可调参数：当前无额外参数。
         默认参数及原因：估值产物默认写入 `valuation/iter_XX`，原因是即使当前不返工，也需要稳定的阶段目录。
         """
 
         iteration_number = self._stage_iteration_number("valuation")
         valuation_dir = self._stage_iteration_dir("valuation")
         self._log_flow(
-            f"_run_valuation_stage started | iteration={iteration_number} | loop_reason={loop_reason} | "
+            f"_run_valuation_stage started | iteration={iteration_number} | "
             f"valuation_output_dir={valuation_dir.as_posix()}"
         )
         self._prepare_tool_context()
         valuation_crew = self._configure_crew_log(ValuationCrew(), self._crew_log_path("valuation_crew"))
-        valuation_crew.crew().kickoff(
-            inputs=self._base_inputs()
-            | {
-                "valuation_output_dir": valuation_dir.as_posix(),
-                "loop_reason": loop_reason,
-                "peer_info_pack_text": self._read(self.state.peer_info_pack_path),
-                "finance_pack_text": self._read(self.state.finance_pack_path),
-                "operating_metrics_pack_text": self._read(self.state.operating_metrics_pack_path),
-                "risk_pack_text": self._read(self.state.risk_pack_path),
-            }
-        )
+        try:
+            valuation_crew.crew().kickoff(
+                inputs=self._base_inputs()
+                | {
+                    "valuation_output_dir": valuation_dir.as_posix(),
+                    "peer_info_pack_text": self._read(self.state.peer_info_pack_path),
+                    "finance_pack_text": self._read(self.state.finance_pack_path),
+                    "operating_metrics_pack_text": self._read(self.state.operating_metrics_pack_path),
+                    "risk_pack_text": self._read(self.state.risk_pack_path),
+                }
+            )
+        except Exception as exc:
+            self._record_stage_failure(
+                stage="valuation",
+                crew_name="valuation_crew",
+                error=exc,
+                checkpoint_payload={
+                    "valuation_output_dir": valuation_dir.as_posix(),
+                    "iteration": iteration_number,
+                },
+            )
+            raise
         self.state.peers_pack_path = (valuation_dir / "01_peers_pack.md").as_posix()
         self.state.intrinsic_value_pack_path = (valuation_dir / "02_intrinsic_value_pack.md").as_posix()
         self.state.valuation_pack_path = (valuation_dir / "03_valuation_pack.md").as_posix()
@@ -881,10 +1350,16 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             pdf_file_path=self.state.pdf_file_path or DEFAULT_PDF_PATH.as_posix(),
             run_cache_dir=self.state.run_cache_dir or DEFAULT_PDF_PATH.parent.as_posix(),
             evidence_registry_path=self.state.evidence_registry_path,
+            registry_snapshot_markdown_path=self._ensure_registry_snapshot_markdown_path(),
             page_index_file_path=self.state.page_index_file_path,
             document_metadata_file_path=self.state.document_metadata_file_path,
             final_report_markdown_path=self.state.final_report_markdown_path,
             final_report_pdf_path=self.state.final_report_pdf_path,
+            failed_stage=self.state.failed_stage,
+            failed_crew=self.state.failed_crew,
+            error_message=self.state.error_message,
+            blocked_packs=self.state.blocked_packs,
+            block_reason=self.state.block_reason,
         )
         return self.state.run_debug_manifest_path
 

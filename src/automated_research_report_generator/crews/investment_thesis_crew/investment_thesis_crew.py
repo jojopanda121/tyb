@@ -21,12 +21,12 @@ from automated_research_report_generator.tools.pdf_page_tools import (
 # 模块功能：提供 thesis 综合和尽调问题设计两个角色，先综合结论，再形成只读权限下的尽调问题。
 # 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
 # 可调参数：`INVESTMENT_THESIS_AGENT_TEMPERATURE`、`INVESTMENT_THESIS_AGENT_REASONING` 和 `output_log_file_path`。
-# 默认参数及原因：默认 `temperature=0.5` 且 `reasoning=True`，原因是这是项目里明确保留的深度思考例外。
+# 默认参数及原因：默认 `temperature=0.5` 且 `reasoning=False`，原因是当前 CrewAI 1.14.1 在 thesis reasoning 上存在兼容噪音，先以稳定产出为主。
 
 PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "investment_thesis_crew.json")
 INVESTMENT_THESIS_AGENT_TEMPERATURE = 0.5
-INVESTMENT_THESIS_AGENT_REASONING = True
+INVESTMENT_THESIS_AGENT_REASONING = False
 
 # 设计目的：让 thesis 任务和 diligence 任务共用同一套 PDF 读取视图，避免引用页码口径不一致。
 # 模块功能：提供页码索引与页面正文读取。
@@ -58,7 +58,7 @@ class InvestmentThesisCrew:
     # 模块功能：构造 investment_synthesizer，并把温度和 reasoning 例外集中在常量里管理。
     # 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
     # 可调参数：INVESTMENT_THESIS_AGENT_TEMPERATURE 和 INVESTMENT_THESIS_AGENT_REASONING。
-    # 默认参数及原因：使用 0.5 和 True，因为这是整个项目里唯一保留显式思考能力的 crew。
+    # 默认参数及原因：使用 0.5 和 False，原因是先绕开 CrewAI 1.14.1 的 thesis reasoning 兼容噪音。
     @agent
     def investment_synthesizer(self) -> Agent:
         """
@@ -66,7 +66,7 @@ class InvestmentThesisCrew:
         模块功能：让该角色只读 registry，并综合各研究包形成投资主线。
         实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
         可调参数：agent 配置、工具列表、temperature 和 reasoning。
-        默认参数及原因：默认使用 0.5 和 True，原因是这是整个项目里唯一保留显式思考能力的 crew。
+        默认参数及原因：默认使用 0.5 和 False，原因是先保证 thesis 阶段稳定执行，再观察是否需要重新打开 reasoning。
         """
 
         return Agent(
@@ -98,7 +98,7 @@ class InvestmentThesisCrew:
     # 模块功能：构造 diligence_question_designer，并只注入 ReadRegistryTool。
     # 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
     # 可调参数：INVESTMENT_THESIS_AGENT_TEMPERATURE 和 INVESTMENT_THESIS_AGENT_REASONING。
-    # 默认参数及原因：仍然使用 0.5 和 True，因为这个 agent 也属于 thesis crew 的思考例外，但权限边界必须保持只读。
+    # 默认参数及原因：仍然使用 0.5 和 False，原因是该 agent 与 thesis 主 agent 共用同一条稳定性策略，但权限边界仍保持只读。
     @agent
     def diligence_question_designer(self) -> Agent:
         """

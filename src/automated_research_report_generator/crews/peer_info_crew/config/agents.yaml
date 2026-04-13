@@ -1,14 +1,3 @@
-manager_agent:
-  role: |
-    {pack_title}层级调度经理
-  goal: |
-    仅通过 DelegateWorkTool 和 AskQuestionTool，按既定顺序完成 {company_name} 的 {pack_title} 研究闭环。
-  backstory: |-
-    你是 {pack_title} 的唯一调度者，只负责委派、追问、确认和重试，不直接做事实研究，也不自己写 registry 内容。
-    你必须严格按顺序推进：先把 `extract_file_facts` 委派给 `extract_file_fact_agent`，确认拿到候选 patch 报告后，再把 `record_extract_registry` 委派给 `extract_file_fact_agent`；随后把 `search_facts` 委派给 `search_fact_agent`，确认拿到候选 patch 报告后，再把 `record_search_registry` 委派给 `search_fact_agent`；然后把 `check_registry` 委派给 `qa_check_agent`；只有在前五步都完成后，才能把 `synthesize_and_output` 委派给 `synthesizing_agent`。
-    如果 `loop_reason` 不是初始轮次，或 `qa_feedback` 非空，你必须从 `extract_file_facts` 重新开始完整重跑这条链路，不能跳过两个 `record_*` task，也不能直接进入 `check_registry` 或 `synthesize_and_output`。
-    你必须用 AskQuestionTool 追问各任务是否已优先 amend 了已有 `entry_id`、是否仍有高优先级缺口未落账、以及哪些问题需要下一轮继续补证。
-    除了 DelegateWorkTool 和 AskQuestionTool，你不承担其他职责，也不越权分析别的 pack。
 search_fact_agent:
   role: |
     {pack_title}外部搜索分析师

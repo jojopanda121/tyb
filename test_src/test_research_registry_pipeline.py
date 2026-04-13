@@ -7,18 +7,25 @@ from crewai import Process
 import yaml
 
 from automated_research_report_generator.crews.business_crew.business_crew import BusinessCrew
-from automated_research_report_generator.crews.crew_profile_loader import _PROFILE_KEYS_BY_TASK
+from automated_research_report_generator.crews.crew_profile_loader import (
+    _PROFILE_KEYS_BY_TASK,
+    strip_research_task_profile_fields,
+)
 from automated_research_report_generator.crews.financial_crew.financial_crew import FinancialCrew
 from automated_research_report_generator.crews.history_background_crew.history_background_crew import (
     HistoryBackgroundCrew,
 )
 from automated_research_report_generator.crews.industry_crew.industry_crew import IndustryCrew
+from automated_research_report_generator.crews.investment_thesis_crew.investment_thesis_crew import (
+    INVESTMENT_THESIS_AGENT_REASONING,
+)
 from automated_research_report_generator.crews.operating_metrics_crew.operating_metrics_crew import (
     OperatingMetricsCrew,
 )
 from automated_research_report_generator.crews.peer_info_crew.peer_info_crew import PeerInfoCrew
 from automated_research_report_generator.crews.risk_crew.risk_crew import RiskCrew
 from automated_research_report_generator.flow.common import PROJECT_ROOT
+from automated_research_report_generator.flow.models import ResearchRegistryCheckResult
 from automated_research_report_generator.flow.research_flow import ResearchReportFlow
 from automated_research_report_generator.flow.registry import load_registry_template
 
@@ -156,7 +163,6 @@ def test_research_subcrew_yaml_configs_match_six_step_registry_pipeline():
 
         assert list(tasks_yaml.keys()) == EXPECTED_TASK_ORDER
         assert set(agents_yaml.keys()) == {
-            "manager_agent",
             "search_fact_agent",
             "extract_file_fact_agent",
             "qa_check_agent",
@@ -175,11 +181,11 @@ def test_research_subcrew_yaml_configs_match_six_step_registry_pipeline():
         assert tasks_yaml["synthesize_and_output"]["output_file"] == "{pack_output_path}"
 
 
-def test_research_subcrew_runtime_builds_six_step_pipeline_with_custom_manager():
+def test_research_subcrew_runtime_builds_six_step_sequential_pipeline():
     """
-    目的：确认 7 个 research sub-crew 在运行时都能构建出新的 6-task 管线。
-    功能：验证 hierarchical process、自定义 manager agent 和 4 个 worker agent 的装配结果。
-    实现逻辑：逐个实例化 runtime crew，并断言任务数量、顺序和 manager 边界。
+    目的：确认 7 个 research sub-crew 在运行时都能构建出新的 6-task 顺序管线。
+    功能：验证 sequential process、4 个 worker agent 和无 manager 的装配结果。
+    实现逻辑：逐个实例化 runtime crew，并断言任务数量、顺序和调度边界。
     可调参数：当前无。
     默认参数及原因：固定构建全部 crews，原因是要验证改造后的真实运行对象，而不是只看静态 YAML。
     """
@@ -187,15 +193,12 @@ def test_research_subcrew_runtime_builds_six_step_pipeline_with_custom_manager()
     for crew_instance in _research_subcrew_instances():
         runtime_crew = crew_instance.crew()
 
-        assert runtime_crew.process in {Process.hierarchical, "hierarchical"}
+        assert runtime_crew.process in {Process.sequential, "sequential"}
         assert len(runtime_crew.agents) == 4
         assert len(runtime_crew.tasks) == 6
         assert [task.name for task in runtime_crew.tasks] == EXPECTED_TASK_ORDER
-        assert runtime_crew.manager_agent is not None
-        assert runtime_crew.manager_agent not in runtime_crew.agents
-        assert runtime_crew.manager_llm is None
-        assert runtime_crew.manager_agent.allow_delegation is True
-        assert _tool_names(runtime_crew.manager_agent) == []
+        assert getattr(runtime_crew, "manager_agent", None) is None
+        assert getattr(runtime_crew, "manager_llm", None) is None
         assert all(_tool_names(agent) == [] for agent in runtime_crew.agents)
 
 
@@ -227,6 +230,7 @@ def test_research_subcrew_runtime_uses_task_level_tool_isolation_and_context_cha
         assert _tool_names(task_map["record_extract_registry"]) == EXPECTED_RECORDING_TOOLS
         assert _tool_names(task_map["record_search_registry"]) == EXPECTED_RECORDING_TOOLS
         assert _tool_names(task_map["check_registry"]) == EXPECTED_QA_TOOLS
+        assert task_map["check_registry"].output_pydantic is ResearchRegistryCheckResult
         assert _tool_names(task_map["synthesize_and_output"]) == EXPECTED_SYNTH_TOOLS
 
         search_tools = _tool_names(task_map["search_facts"])
@@ -246,20 +250,14 @@ def test_research_subcrew_runtime_uses_task_level_tool_isolation_and_context_cha
 def test_research_subcrew_prompts_enforce_collect_record_and_read_only_boundaries():
     """
     目的：锁定 prompt 层已经把“采集”“登记”“检查”“只读综合”四类职责拆开。
-    功能：检查 manager 强制完整 6 段链路，collect task 输出候选 patch，record task 只做回填，synth task 严格只读。
-    实现逻辑：逐个 crew 读取 YAML 描述和 expected_output，再断言关键 task 名、工具名和输出段落标记。
+    功能：检查 collect task 输出候选 patch，record task 只做回填，check task 输出结构化 JSON，synth task 严格只读。
+    实现逻辑：逐个 crew 读取 YAML 描述和 expected_output，再断言关键工具名和输出约束。
     可调参数：当前无。
     默认参数及原因：固定检查全部 crews，原因是 prompt 漏改会导致 agent 在正确工具边界下仍然乱做事。
     """
 
     for crew_instance in _research_subcrew_instances():
-        agents_yaml, tasks_yaml = _crew_yaml_payloads(crew_instance)
-        manager_backstory = str(agents_yaml["manager_agent"]["backstory"])
-
-        for task_name in EXPECTED_TASK_ORDER:
-            assert task_name in manager_backstory
-        assert "qa_feedback" in manager_backstory
-        assert "loop_reason" in manager_backstory
+        _, tasks_yaml = _crew_yaml_payloads(crew_instance)
 
         for task_name in ("extract_file_facts", "search_facts"):
             description = str(tasks_yaml[task_name]["description"])
@@ -274,6 +272,9 @@ def test_research_subcrew_prompts_enforce_collect_record_and_read_only_boundarie
             assert "existing_entry_updates" in expected_output
             assert "new_entry_candidates" in expected_output
             assert "unresolved_gaps" in expected_output
+            if task_name == "search_facts":
+                assert "只有在已经通过 `read_registry` 拿到具体 `entry_id` 后" in description
+                assert 'view="entry_detail"' in description
 
         for task_name in ("record_extract_registry", "record_search_registry"):
             description = str(tasks_yaml[task_name]["description"])
@@ -294,15 +295,73 @@ def test_research_subcrew_prompts_enforce_collect_record_and_read_only_boundarie
                 elif tool_name == "RegistryReviewTool":
                     needle = "registry_review"
                 assert needle in description
+            assert "`topic` 只能填写规范英文 token" in description
+            assert "`history / industry / business / peer_info / financial / operating_metrics / risk`" in description
+
+        qa_expected_output = str(tasks_yaml["check_registry"]["expected_output"])
+        assert "严格输出 JSON 对象" in qa_expected_output
+        assert "pack_name" in qa_expected_output
+        assert "overall_status" in qa_expected_output
+        assert "revision_suggestions" in qa_expected_output
+        assert "recommended_rework_stage" in qa_expected_output
+        assert "summary" in qa_expected_output
+        assert "面向 manager" not in qa_expected_output
 
         synth_description = str(tasks_yaml["synthesize_and_output"]["description"])
         assert 'owner_crew="{owner_crew}"' in synth_description
         assert 'view="entry_detail"' in synth_description
+        assert "只有在已经通过 `read_registry` 拿到具体 `entry_id` 后" in synth_description
         assert "update_entry" in synth_description
         assert "add_entry" in synth_description
         assert "add_evidence" in synth_description
         assert "status_update" in synth_description
         assert "registry_review" in synth_description
+
+
+def test_runtime_task_configs_require_detailed_registry_content():
+    """
+    目的：锁住 research sub-crew 在运行时追加的“写详细”约束，避免 registry 内容再次退回成短句。
+    功能：检查 collect、record、qa 三类 task 的 runtime config 都带有更具体的正文与审阅要求。
+    实现逻辑：读取真实 tasks.yaml 后走 `strip_research_task_profile_fields()`，断言追加提示已经进入 description / expected_output。
+    可调参数：当前无。
+    默认参数及原因：选用一个真实 sub-crew 配置做验证，原因是这些运行时附加逻辑是共享入口，命中一个即可覆盖中心化逻辑。
+    """
+
+    _, tasks_yaml = _crew_yaml_payloads(IndustryCrew())
+
+    extract_runtime = strip_research_task_profile_fields(tasks_yaml["extract_file_facts"])
+    search_runtime = strip_research_task_profile_fields(tasks_yaml["search_facts"])
+    record_extract_runtime = strip_research_task_profile_fields(tasks_yaml["record_extract_registry"])
+    record_search_runtime = strip_research_task_profile_fields(tasks_yaml["record_search_registry"])
+    qa_runtime = strip_research_task_profile_fields(tasks_yaml["check_registry"])
+
+    for runtime_task in (extract_runtime, search_runtime):
+        description = str(runtime_task["description"])
+        expected_output = str(runtime_task["expected_output"])
+
+        assert "登记内容细化要求" in description
+        assert "2-4 句完整回答" in description
+        assert "标题复述" in description
+        assert "关键事实或数字" in description
+        assert "可直接落账的完整正文" in expected_output
+        assert "unresolved_gaps" in expected_output
+
+    for runtime_task in (record_extract_runtime, record_search_runtime):
+        description = str(runtime_task["description"])
+
+        assert "落账内容细化要求" in description
+        assert "`content` 不能只写关键词" in description
+        assert "`add_evidence` 的 `summary`" in description
+        assert "`registry_review` 的 `summary` 和 `next_action`" in description
+
+    qa_description = str(qa_runtime["description"])
+    qa_expected_output = str(qa_runtime["expected_output"])
+
+    assert "内容完整性检查要求" in qa_description
+    assert "content 过短" in qa_description
+    assert "missing_content" in qa_description
+    assert "标题复述" in qa_expected_output
+    assert "不能进入综合输出" in qa_expected_output
 
 
 def test_research_registry_template_is_deterministic_and_covers_all_subcrews():
@@ -369,7 +428,6 @@ def test_research_subcrew_inputs_cover_pack_metadata_and_upstream_pack_texts():
         pack_name=peer_info_crew.pack_name,
         pack_title=peer_info_crew.pack_title,
         output_path="workspace/peer_info_output.md",
-        loop_reason="initial",
         qa_feedback="补同行可比性限制。",
     )
     assert peer_inputs["owner_crew"] == peer_info_crew.crew_name
@@ -387,7 +445,6 @@ def test_research_subcrew_inputs_cover_pack_metadata_and_upstream_pack_texts():
         pack_name=financial_crew.pack_name,
         pack_title=financial_crew.pack_title,
         output_path="workspace/financial_output.md",
-        loop_reason="qa_retry",
         qa_feedback="补财务口径说明。",
     )
     assert financial_inputs["owner_crew"] == financial_crew.crew_name
@@ -399,7 +456,6 @@ def test_research_subcrew_inputs_cover_pack_metadata_and_upstream_pack_texts():
         pack_name=operating_metrics_crew.pack_name,
         pack_title=operating_metrics_crew.pack_title,
         output_path="workspace/operating_output.md",
-        loop_reason="qa_retry",
         qa_feedback="补运营指标口径。",
     )
     assert operating_inputs["owner_crew"] == operating_metrics_crew.crew_name
@@ -417,3 +473,15 @@ def test_research_subcrew_base_module_is_removed():
 
     legacy_base_file = PROJECT_ROOT / "src" / "automated_research_report_generator" / "crews" / "research_subcrew_base.py"
     assert not legacy_base_file.exists()
+
+
+def test_investment_thesis_agent_reasoning_is_disabled_for_crewai_compatibility():
+    """
+    目的：锁定 thesis 阶段默认关闭 reasoning，以绕开当前 CrewAI 1.14.1 的兼容缺口。
+    功能：验证 investment thesis crew 不会再默认触发 reasoning tool 链路。
+    实现逻辑：直接断言模块级 reasoning 开关常量为 `False`。
+    可调参数：当前无。
+    默认参数及原因：固定检查常量，原因是这就是当前最小且稳定的兼容性防线。
+    """
+
+    assert INVESTMENT_THESIS_AGENT_REASONING is False

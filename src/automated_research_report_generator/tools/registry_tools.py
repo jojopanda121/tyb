@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from automated_research_report_generator.flow.models import (
     OWNER_CREW_TO_DEFAULT_TOPIC,
+    PACK_TO_REGISTRY_TOPIC,
     TOPIC_TO_OWNER_CREW,
     EvidenceRegistrySnapshot,
     RegistryEntryPriority,
@@ -53,6 +54,57 @@ ReadRegistryView = Literal[
     "entry_detail",
     "evidence_detail",
 ]
+ENTRY_TYPE_VALUES = ("fact", "data", "judgment")
+CONTENT_TYPE_VALUES = ("single", "table")
+TOPIC_ALIAS_TO_CANONICAL = {
+    **{pack_name.lower(): topic for pack_name, topic in PACK_TO_REGISTRY_TOPIC.items()},
+    "history": "history",
+    "history_background": "history",
+    "历史": "history",
+    "历史背景": "history",
+    "历史与背景": "history",
+    "历史背景分析包": "history",
+    "历史与背景分析包": "history",
+    "历史背景研究包": "history",
+    "历史与背景研究包": "history",
+    "industry": "industry",
+    "行业": "industry",
+    "行业分析包": "industry",
+    "行业研究包": "industry",
+    "business": "business",
+    "业务": "business",
+    "业务分析包": "business",
+    "业务研究包": "business",
+    "peer_info": "peer_info",
+    "同行信息": "peer_info",
+    "同行信息分析包": "peer_info",
+    "同行信息研究包": "peer_info",
+    "financial": "financial",
+    "finance": "financial",
+    "财务": "financial",
+    "财务分析包": "financial",
+    "财务研究包": "financial",
+    "operating_metrics": "operating_metrics",
+    "运营指标": "operating_metrics",
+    "运营指标分析包": "operating_metrics",
+    "运营指标研究包": "operating_metrics",
+    "risk": "risk",
+    "风险": "risk",
+    "风险分析包": "risk",
+    "风险研究包": "risk",
+}
+
+
+def _format_allowed_values(values: tuple[str, ...]) -> str:
+    """
+    目的：统一生成工具入参报错时使用的允许值列表文本。
+    功能：把固定枚举值拼成稳定、可读的英文 token 列表。
+    实现逻辑：直接按既定顺序用逗号拼接，避免不同调用点各自组织报错文案。
+    可调参数：`values`。
+    默认参数及原因：不做排序重排，原因是希望报错顺序与项目内实际枚举顺序一致。
+    """
+
+    return ", ".join(values)
 
 
 def _normalize_registry_path(registry_path: str) -> str:
@@ -92,13 +144,13 @@ class AddEntryInput(BaseModel):
     """
 
     entry_id: str = Field(..., description="唯一 entry ID。")
-    entry_type: RegistryEntryType = Field(default="judgment", description="entry 类型。")
+    entry_type: str = Field(default="judgment", description="entry 类型；允许值仅有 fact / data / judgment。")
     topic: str = Field(default="", description="entry 所属主题；留空时仅在 owner_crew 可唯一映射时自动推断。")
     owner_crew: str = Field(default="", description="负责该 entry 的 crew；留空时仅在 topic 可唯一映射时自动推断。")
     priority: RegistryEntryPriority = Field(default="medium", description="entry 优先级。")
     title: str = Field(..., description="entry 标题。")
     description: str = Field(default="", description="对该条目期望输出的指引。")
-    content_type: RegistryContentType = Field(default="single", description="内容形态。")
+    content_type: str = Field(default="single", description="内容形态；允许值仅有 single / table。")
     content: str | list[dict[str, str]] = Field(default="", description="single 为字符串，table 为行字典列表。")
     columns: list[str] = Field(default_factory=list, description="table 类型的列头定义。")
     unit: str = Field(default="", description="single 类型可选单位。")
@@ -120,13 +172,13 @@ class UpdateEntryInput(BaseModel):
     """
 
     entry_id: str = Field(..., description="要更新的 entry_id。")
-    entry_type: RegistryEntryType | None = Field(default=None, description="可选；如需修正 entry 类型时填写。")
+    entry_type: str | None = Field(default=None, description="可选；如需修正 entry 类型时填写，仅允许 fact / data / judgment。")
     topic: str = Field(default="", description="可选；如需修正主题时填写。")
     owner_crew: str = Field(default="", description="可选；如需修正责任 crew 时填写。")
     priority: RegistryEntryPriority | None = Field(default=None, description="可选；更新优先级。")
     title: str = Field(default="", description="可选；如需修正标题时填写。")
     description: str = Field(default="", description="可选；如需修正说明时填写。")
-    content_type: RegistryContentType | None = Field(default=None, description="可选；如需切换 single/table 时填写。")
+    content_type: str | None = Field(default=None, description="可选；如需切换 single/table 时填写，仅允许 single / table。")
     content: str | list[dict[str, str]] | None = Field(default=None, description="可选；更新正文或表格内容。")
     columns: list[str] | None = Field(default=None, description="可选；更新 table 列头。")
     unit: str = Field(default="", description="可选；更新 single 类型单位。")
@@ -299,12 +351,18 @@ class _RegistryToolBase(BaseTool):
         默认参数及原因：valuation_crew 这类多 topic owner 不做模糊推断，原因是避免错误归类。
         """
 
-        normalized_topic = topic.strip()
+        raw_topic = topic.strip()
+        normalized_topic = self._normalize_topic_alias(raw_topic)
         normalized_owner_crew = owner_crew.strip()
+        if normalized_topic and normalized_owner_crew and normalized_owner_crew not in OWNER_CREW_TO_DEFAULT_TOPIC:
+            normalized_owner_crew = TOPIC_TO_OWNER_CREW.get(normalized_topic, normalized_owner_crew)
         if normalized_topic and not normalized_owner_crew:
             inferred_owner = TOPIC_TO_OWNER_CREW.get(normalized_topic)
             if not inferred_owner:
-                raise ValueError(f"Unsupported registry topic: {normalized_topic}")
+                raise ValueError(
+                    "Unsupported registry topic: "
+                    f"{raw_topic}. Allowed topics: {_format_allowed_values(tuple(TOPIC_TO_OWNER_CREW.keys()))}"
+                )
             normalized_owner_crew = inferred_owner
         if normalized_owner_crew and not normalized_topic:
             inferred_topic = OWNER_CREW_TO_DEFAULT_TOPIC.get(normalized_owner_crew)  # type: ignore[arg-type]
@@ -313,9 +371,93 @@ class _RegistryToolBase(BaseTool):
                     "topic is required when owner_crew cannot be mapped to a unique default topic."
                 )
             normalized_topic = inferred_topic
+        if raw_topic and not normalized_topic and not normalized_owner_crew:
+            raise ValueError(
+                "Unsupported registry topic: "
+                f"{raw_topic}. Allowed topics: {_format_allowed_values(tuple(TOPIC_TO_OWNER_CREW.keys()))}"
+            )
         if not normalized_owner_crew or not normalized_topic:
             raise ValueError("owner_crew and topic must be provided, or one must uniquely infer the other.")
         return normalized_owner_crew, normalized_topic
+
+    def _normalize_topic_alias(self, topic: str) -> str:
+        """
+        目的：在工具层把少量高频 topic 别名收敛为 registry 规范 token。
+        功能：兼容 pack_name、中文包名和当前日志里已经确认出现过的少量别名。
+        实现逻辑：先尝试命中规范 token，再按小写别名映射表查找；命不中则返回空串，由上层决定回退或报错。
+        可调参数：`topic`。
+        默认参数及原因：只覆盖已确认高频误填，原因是本轮修复只想消除已知噪音，不扩大模糊匹配范围。
+        """
+
+        normalized_topic = topic.strip()
+        if not normalized_topic:
+            return ""
+        if normalized_topic in TOPIC_TO_OWNER_CREW:
+            return normalized_topic
+        return TOPIC_ALIAS_TO_CANONICAL.get(normalized_topic.lower(), "")
+
+    def _normalize_entry_shape(
+        self,
+        *,
+        entry_type: str | None,
+        content_type: str | None,
+    ) -> tuple[str | None, str | None]:
+        """
+        目的：在真正写 registry 前兜住少量已知的 entry/content 类型误填。
+        功能：支持把误传到 `entry_type` 里的 `single/table` 转移回 `content_type`，其余非法值继续报错。
+        实现逻辑：先标准化字符串，再执行一次有限纠偏，最后分别校验两个字段是否落在允许值集合内。
+        可调参数：`entry_type` 和 `content_type`。
+        默认参数及原因：只处理 `single/table` 误传，原因是这是日志里已经确认的高频噪音，其余值仍应暴露为真实错误。
+        """
+
+        normalized_entry_type = entry_type.strip() if isinstance(entry_type, str) else entry_type
+        normalized_content_type = content_type.strip() if isinstance(content_type, str) else content_type
+
+        if normalized_entry_type in CONTENT_TYPE_VALUES:
+            if normalized_content_type:
+                raise ValueError(
+                    "entry_type cannot be single/table when content_type is already provided. "
+                    f"Allowed entry_type values: {_format_allowed_values(ENTRY_TYPE_VALUES)}"
+                )
+            normalized_content_type = normalized_entry_type
+            normalized_entry_type = None
+
+        if normalized_entry_type == "":
+            normalized_entry_type = None
+        if normalized_content_type == "":
+            normalized_content_type = None
+
+        if normalized_entry_type is not None and normalized_entry_type not in ENTRY_TYPE_VALUES:
+            raise ValueError(
+                "Unsupported entry_type: "
+                f"{normalized_entry_type}. Allowed values: {_format_allowed_values(ENTRY_TYPE_VALUES)}"
+            )
+        if normalized_content_type is not None and normalized_content_type not in CONTENT_TYPE_VALUES:
+            raise ValueError(
+                "Unsupported content_type: "
+                f"{normalized_content_type}. Allowed values: {_format_allowed_values(CONTENT_TYPE_VALUES)}"
+            )
+        return normalized_entry_type, normalized_content_type
+
+    def _invalid_request_payload(self, *, view: str, message: str, hint: str) -> str:
+        """
+        目的：让只读工具在无效调用时返回结构化结果，而不是把异常直接抛给 agent。
+        功能：输出带 `status=invalid_request` 的 JSON，便于 agent 在同一轮里读懂问题并自我纠偏。
+        实现逻辑：把视图名、报错信息和下一步建议统一序列化成固定 JSON 结构。
+        可调参数：`view`、`message` 和 `hint`。
+        默认参数及原因：固定返回 JSON 字符串，原因是 read tool 的其他视图也都走结构化文本返回。
+        """
+
+        return json.dumps(
+            {
+                "status": "invalid_request",
+                "view": view,
+                "message": message,
+                "hint": hint,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
     def _build_entry_evidence_index(
         self,
@@ -448,7 +590,7 @@ class _RegistryToolBase(BaseTool):
         include_status_set = set(include_statuses)
         exclude_status_set = set(exclude_statuses)
         normalized_owner_crew = owner_crew.strip()
-        normalized_topic = topic.strip()
+        normalized_topic = self._normalize_topic_alias(topic) or topic.strip()
         keyword = title_contains.strip().lower()
         entries = []
         for entry in snapshot.entries:
@@ -523,7 +665,11 @@ class _RegistryToolBase(BaseTool):
         """
 
         if not entry_ids:
-            raise ValueError("entry_ids is required when view=entry_detail.")
+            return self._invalid_request_payload(
+                view="entry_detail",
+                message="entry_ids is required when view=entry_detail.",
+                hint="Use view=markdown or view=entry_list first to locate specific entry_id values, then call view=entry_detail.",
+            )
 
         snapshot = self._load_snapshot()
         evidence_index = self._build_entry_evidence_index(snapshot)
@@ -579,20 +725,21 @@ class AddEntryTool(_RegistryToolBase):
     name: str = "add_entry"
     description: str = (
         "Append a newly discovered entry to the evidence registry. "
-        "Use this when the current template does not already contain the needed entry."
+        "Use this when the current template does not already contain the needed entry. "
+        "When content_type=single, write a complete answer with key facts, scope, and basis, not a short label."
     )
     args_schema: type[BaseModel] = AddEntryInput
 
     def _run(
         self,
         entry_id: str,
-        entry_type: RegistryEntryType = "judgment",
+        entry_type: str = "judgment",
         topic: str = "",
         owner_crew: str = "",
         priority: RegistryEntryPriority = "medium",
         title: str = "",
         description: str = "",
-        content_type: RegistryContentType = "single",
+        content_type: str = "single",
         content: str | list[dict[str, str]] = "",
         columns: list[str] | None = None,
         unit: str = "",
@@ -611,19 +758,23 @@ class AddEntryTool(_RegistryToolBase):
         默认参数及原因：默认状态是 `unchecked`、优先级是 `medium`，原因是这最符合运行中发现新条目的常见场景。
         """
 
+        normalized_entry_type, normalized_content_type = self._normalize_entry_shape(
+            entry_type=entry_type,
+            content_type=content_type,
+        )
         normalized_owner_crew, normalized_topic = self._resolve_owner_and_topic(
             owner_crew=owner_crew,
             topic=topic,
         )
         entry = RegistryEntry(
             entry_id=entry_id,
-            entry_type=entry_type,
+            entry_type=normalized_entry_type or "judgment",
             topic=normalized_topic,  # type: ignore[arg-type]
             owner_crew=normalized_owner_crew,  # type: ignore[arg-type]
             priority=priority,
             title=title,
             description=description,
-            content_type=content_type,
+            content_type=normalized_content_type or "single",
             content=content,
             columns=columns or [],
             unit=unit,
@@ -650,20 +801,21 @@ class UpdateEntryTool(_RegistryToolBase):
     name: str = "update_entry"
     description: str = (
         "Update an existing evidence-registry entry. "
-        "Use this to fill seeded template entries with validated content, tables, sources, confidence, and status."
+        "Use this to fill seeded template entries with validated content, tables, sources, confidence, and status. "
+        "Single-content entries should be complete answers with concrete facts, numbers, scope, and support."
     )
     args_schema: type[BaseModel] = UpdateEntryInput
 
     def _run(
         self,
         entry_id: str,
-        entry_type: RegistryEntryType | None = None,
+        entry_type: str | None = None,
         topic: str = "",
         owner_crew: str = "",
         priority: RegistryEntryPriority | None = None,
         title: str = "",
         description: str = "",
-        content_type: RegistryContentType | None = None,
+        content_type: str | None = None,
         content: str | list[dict[str, str]] | None = None,
         columns: list[str] | None = None,
         unit: str = "",
@@ -682,17 +834,21 @@ class UpdateEntryTool(_RegistryToolBase):
         默认参数及原因：默认只要求 `entry_id`，原因是模板化补值大多是局部更新。
         """
 
+        normalized_entry_type, normalized_content_type = self._normalize_entry_shape(
+            entry_type=entry_type,
+            content_type=content_type,
+        )
         updates: dict[str, object] = {}
-        if entry_type is not None:
-            updates["entry_type"] = entry_type
+        if normalized_entry_type is not None:
+            updates["entry_type"] = normalized_entry_type
         if topic:
             updates["topic"] = topic
         if title:
             updates["title"] = title
         if description:
             updates["description"] = description
-        if content_type is not None:
-            updates["content_type"] = content_type
+        if normalized_content_type is not None:
+            updates["content_type"] = normalized_content_type
         if content is not None:
             updates["content"] = content
         if columns is not None:
@@ -737,7 +893,8 @@ class AddEvidenceTool(_RegistryToolBase):
     name: str = "add_evidence"
     description: str = (
         "Append a new evidence record to the evidence registry and link it to one or more existing entries. "
-        "Keep the summary short and factual, and always include a precise source_ref."
+        "Write the summary as a concrete 1-3 sentence evidence note with the key fact, scope/date, and why it matters, "
+        "and always include a precise source_ref."
     )
     args_schema: type[BaseModel] = AddEvidenceInput
 
@@ -825,7 +982,8 @@ class RegistryReviewTool(_RegistryToolBase):
     name: str = "registry_review"
     description: str = (
         "Record a registry review note for the current task. "
-        "Call this once before finishing the task, even when no entry or evidence changed."
+        "Call this once before finishing the task, even when no entry or evidence changed. "
+        "Be specific about what changed, what is still missing, and the next recommended action."
     )
     args_schema: type[BaseModel] = RegistryReviewInput
 

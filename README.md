@@ -5,7 +5,7 @@
 ## 当前实现边界
 
 - 当前项目版本：`0.2.0`
-- 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.0`
+- 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.1`
 - 当前项目类型：`[tool.crewai].type = "flow"`
 - 当前主入口：`src/automated_research_report_generator/main.py`
 - 当前主 Flow：`src/automated_research_report_generator/flow/research_flow.py`
@@ -18,6 +18,8 @@
 - planning 只做确定性初始化：`build_research_plan` 直接加载 `flow/config/registry_template.yaml`，不再生成独立 planning 产物。
 - registry 是研究主接口：research、valuation、thesis 和 writeup 都围绕 `evidence_registry.json` 协作。
 - research 内部自校验：research 不再经过外部 gate，而是汇总 7 个 sub-crew 的 `check_registry` 输出来形成内部校验摘要。
+- research 子 crew 调度：7 个 research sub-crews 在 crew 内统一使用 `Process.sequential`，不再依赖 manager agent 做任务转派。
+- `check_registry` 输出契约：优先输出结构化 JSON 并由 Flow 直接汇总 `ready/not_ready` 供内部校验摘要使用；若结构化结果缺失，则降级到原始 memo 解析并记录 warning，且不阻断下游阶段。
 - 运行目录按 run 隔离：单次运行统一写入 `.cache/<run_slug>/`，方便排查单轮产物、日志和快照。
 
 ## 当前 Flow 链路
@@ -42,8 +44,10 @@
    - 产出 `investment_thesis` 和 `diligence_questions`
    - 可读取完整 registry 快照，但不经过外部 thesis gate
 6. `publish_if_passed`
-   - 汇总上游 pack
-   - 生成最终 Markdown 与 PDF
+   - 先由 flow 确定性拼装最终 Markdown
+   - 主文完整纳入 thesis、7 个 research packs、3 个 valuation packs 和内部校验摘要
+   - 末尾以附录方式追加 `registry_snapshot.md`
+   - 再调用 writeup crew 做非破坏性确认与 PDF 导出
 
 ## 当前 Crew 结构
 

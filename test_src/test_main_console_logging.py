@@ -100,3 +100,8 @@ def test_write_run_debug_manifest_includes_console_log_path(tmp_path, monkeypatc
     assert manifest["console_log_file_path"] == (
         cache_root / "20260413_测试公司" / "logs" / "console.txt"
     ).resolve().as_posix()
+    assert manifest["failed_stage"] == ""
+    assert manifest["failed_crew"] == ""
+    assert manifest["error_message"] == ""
+    assert manifest["blocked_packs"] == []
+    assert manifest["block_reason"] == ""

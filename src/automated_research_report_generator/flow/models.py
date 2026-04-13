@@ -259,6 +259,50 @@ class EvidenceRegistrySnapshot(BaseModel):
     updated_at: str = Field(default_factory=utc_timestamp)
 
 
+class ResearchRegistryCheckIssue(BaseModel):
+    """
+    目的：定义 research 子 crew 内部 QA 检查中单条未通过问题的结构。
+    功能：统一承载条目 ID、问题类型和详细说明，供 Flow 稳定消费。
+    实现逻辑：使用固定字段和 `Literal` 枚举约束问题类型，减少自由文本漂移。
+    可调参数：`issue_type` 的枚举范围和 `detail` 的具体描述内容。
+    默认参数及原因：本模型不提供业务默认值，原因是每条问题都必须显式来自真实检查结果。
+    """
+
+    entry_id: str = Field(description="未通过检查的条目 ID")
+    issue_type: Literal[
+        "missing_content",
+        "need_revision",
+        "source_conflict",
+        "incomplete_table",
+    ] = Field(description="问题类型")
+    detail: str = Field(description="问题描述")
+
+
+class ResearchRegistryCheckResult(BaseModel):
+    """
+    目的：定义 research 子 crew 内部 QA 检查结果的结构化输出。
+    功能：统一表达整体就绪状态、未通过条目、返工建议和简要结论。
+    实现逻辑：用固定字段约束 `check_registry` 输出，便于 Flow 直接判定是否阻断下游。
+    可调参数：问题列表、修订建议列表和建议回退阶段。
+    默认参数及原因：列表字段默认空列表，原因是 ready 场景下本就不应凭空生成问题或建议。
+    """
+
+    pack_name: str = Field(description="当前分析包名称")
+    overall_status: Literal["ready", "not_ready"] = Field(description="整体就绪状态")
+    issues: list[ResearchRegistryCheckIssue] = Field(
+        default_factory=list,
+        description="未通过的条目列表，ready 时应为空",
+    )
+    revision_suggestions: list[str] = Field(
+        default_factory=list,
+        description="修订建议",
+    )
+    recommended_rework_stage: Literal["extract", "search", "none"] = Field(
+        description="建议回退阶段，ready 时应为 none",
+    )
+    summary: str = Field(description="QA 检查摘要")
+
+
 class ResearchFlowState(BaseModel):
     """
     目的：统一保存整条 Flow 在各阶段共享的运行状态。
@@ -296,9 +340,15 @@ class ResearchFlowState(BaseModel):
     investment_thesis_path: str = ""
     diligence_questions_path: str = ""
     research_internal_review_summary_path: str = ""
+    registry_snapshot_markdown_path: str = ""
 
     final_report_markdown_path: str = ""
     final_report_pdf_path: str = ""
+    failed_stage: str = ""
+    failed_crew: str = ""
+    error_message: str = ""
+    blocked_packs: list[str] = Field(default_factory=list)
+    block_reason: str = ""
 
     valuation_loop_count: int = 0
     thesis_loop_count: int = 0

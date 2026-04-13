@@ -6,7 +6,6 @@ extract_file_facts:
     输入：
     - PDF 文件路径：{pdf_file_path}
     - 页面索引文件路径：{page_index_file_path}
-    - 当前 loop 原因：{loop_reason}
     - 当前专题焦点：{pack_focus}
     - 返工反馈：{qa_feedback}
 
@@ -33,7 +32,6 @@ record_extract_registry:
 
     输入：
     - 当前责任 crew：{owner_crew}
-    - 当前 loop 原因：{loop_reason}
     - 当前专题焦点：{pack_focus}
     - 返工反馈：{qa_feedback}
     - 上游上下文：`extract_file_facts` 的候选 patch 报告
@@ -44,6 +42,7 @@ record_extract_registry:
     - 对 `existing_entry_updates` 中的候选，优先使用 `update_entry` amend 既有 `entry_id`；必要时补齐 `unit`、`period`、`source`、`confidence`。
     - 对 `content_type="table"` 的条目，按 `columns` 完整更新表格行，不要只补半行字段。
     - 只有确认现有条目不存在语义匹配槽位时，才允许使用 `add_entry` 新建条目。
+    - 调用 `add_entry` 或 `update_entry` 时，`topic` 只能填写规范英文 token：`history / industry / business / peer_info / financial / operating_metrics / risk`；不要填写中文包名、`{pack_title}`、`xx分析包` 或 `xx研究包`。
     - 对新增或实质更新后的结论，必须补 `add_evidence`；必要时用 `status_update` 写清 `revision_detail`。
     - 如果 `qa_feedback` 非空，优先关闭其中属于 PDF 提取与原文核对的缺口；无法关闭的条目要明确保留为 `need_revision`。
     - 任务结束前必须调用 `registry_review` 留痕，说明本轮 amend 了哪些条目、是否新建条目，以及哪些缺口仍未关闭。
@@ -67,13 +66,12 @@ search_facts:
     输入：
     - 行业：{industry}
     - 当前责任 crew：{owner_crew}
-    - 当前 loop 原因：{loop_reason}
     - 当前专题焦点：{pack_focus}
     - 返工反馈：{qa_feedback}
 
     执行要求：
     - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目清单，优先关注 `unchecked / need_revision` 的 `high / medium` 条目。
-    - 必要时继续用 `view="entry_detail"` 读取具体 `entry_id`，确认现有条目的字段、口径和缺口，但本任务不得直接修改 registry。
+    - 只有在已经通过 `read_registry` 拿到具体 `entry_id` 后，才允许继续用 `view="entry_detail"` 下钻；禁止在 `entry_id` 为空时直接调用该视图。
     - 只处理当前 crew 负责的条目和与之直接相关的新发现，不要越权补写其他 pack。
     - {search_guidance}
     - 如果 `qa_feedback` 非空，优先回应其中属于外部搜索补证的缺口；被标成 `need_revision` 的条目要结合 `revision_detail` 输出定向修订建议。
@@ -94,7 +92,6 @@ record_search_registry:
 
     输入：
     - 当前责任 crew：{owner_crew}
-    - 当前 loop 原因：{loop_reason}
     - 当前专题焦点：{pack_focus}
     - 返工反馈：{qa_feedback}
     - 上游上下文：`search_facts` 的候选 patch 报告
@@ -105,6 +102,7 @@ record_search_registry:
     - 对 `existing_entry_updates` 中的候选，优先使用 `update_entry` amend 既有 `entry_id`；必要时补齐 `unit`、`period`、`source`、`confidence`。
     - 对 `content_type="table"` 的条目，按 `columns` 完整更新表格行，不要只补半行字段。
     - 只有确认现有条目不存在语义匹配槽位时，才允许使用 `add_entry` 新建条目。
+    - 调用 `add_entry` 或 `update_entry` 时，`topic` 只能填写规范英文 token：`history / industry / business / peer_info / financial / operating_metrics / risk`；不要填写中文包名、`{pack_title}`、`xx分析包` 或 `xx研究包`。
     - 对新增或实质更新后的结论，必须补 `add_evidence`；必要时用 `status_update` 写清 `revision_detail`。
     - 如果 `qa_feedback` 非空，优先关闭其中属于外部搜索补证的缺口；无法关闭的条目要明确保留为 `need_revision`。
     - 任务结束前必须调用 `registry_review` 留痕，说明本轮 amend 了哪些条目、是否新建条目，以及哪些缺口仍未关闭。
@@ -127,7 +125,15 @@ check_registry:
     - 如果发现遗漏，使用 `status_update` 补充更具体的 `revision_detail`，并在 `registry_review` 里写明建议回退给 `extract` 还是 `search`。
     - 你不负责新增正文内容；你只负责检查、标记和留痕。
     - 任务结束前必须调用 `registry_review` 留痕。
-  expected_output: 面向 manager 的 QA 检查备忘录：整体就绪状态（ready/not ready）、未通过的 `entry_id` 及问题类型、修订建议、建议回退给 `extract` 还是 `search`。
+  expected_output: |-
+    严格输出 JSON 对象，包含以下字段：
+    - pack_name: 当前分析包名称（字符串）
+    - overall_status: "ready" 或 "not_ready"
+    - issues: 未通过条目列表，每项包含 entry_id、issue_type（枚举：missing_content / need_revision / source_conflict / incomplete_table）、detail
+    - revision_suggestions: 修订建议列表（字符串数组）
+    - recommended_rework_stage: "extract"、"search" 或 "none"
+    - summary: 一段话总结检查结论
+    ready 时 issues 应为空、recommended_rework_stage 应为 "none"。
   agent: qa_check_agent
 synthesize_and_output:
   synthesize_guidance: 输出要明确商业模式闭环、客户结构与集中度风险、技术护城河强度、扩张路径可行性和待验证假设。
@@ -169,7 +175,7 @@ synthesize_and_output:
     - 当前专题焦点：{pack_focus}
 
     执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的全部条目；必要时继续用 `view="entry_detail"` 下钻关键 `entry_id`。
+    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的全部条目；只有在已经通过 `read_registry` 拿到具体 `entry_id` 后，才允许继续用 `view="entry_detail"` 下钻关键条目。
     - 只综合当前 crew 负责的事实、数据、judgment 和相关证据，不得越权引用其他 pack 的未沉淀内容。
     - 本任务是严格只读综合：不得调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update` 修改 entry 内容、状态或证据。
     - 如果 `high / medium` 条目仍是 `unchecked / need_revision`，必须在正文和 `registry_review` 里显式写出缺口、影响和建议补证方向，不能偷偷补写 registry。

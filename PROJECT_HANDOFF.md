@@ -17,7 +17,7 @@
 - 远端仓库：`https://github.com/tybzhw1230-boop/automated_research_report_generator_v0.1`
 - 当前包名：`automated_research_report_generator`
 - 当前版本：`0.2.0`
-- 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.0`
+- 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.1`
 - 当前项目类型：`[tool.crewai].type = "flow"`
 
 ## 当前真实工作状态
@@ -133,14 +133,19 @@
    - 产出 `investment_thesis`、`diligence_questions`
    - 可读取完整 registry 快照
 6. `publish_if_passed`
-   - 汇总上游材料
-   - 调用 writeup crew 生成最终 Markdown 与 PDF
+   - 先由 flow 确定性拼装最终 Markdown
+   - 主文完整纳入 thesis、7 个 research packs、3 个 valuation packs 和内部校验摘要
+   - 末尾以附录方式追加 `registry_snapshot.md`
+   - 再调用 writeup crew 做非破坏性确认与 PDF 导出
 
 当前校验规则：
 
 - `research` 阶段不再保留外部 gate
 - 7 个 research sub-crews 各自保留内部 `check_registry` 任务
+- 7 个 research sub-crews 在 crew 内统一使用 `Process.sequential`，不再依赖 manager agent 转派任务
 - Flow 会把 7 个 `check_registry` 输出汇总成 `08_research_internal_registry_checks.md`
+- `check_registry` 的 `ready/not_ready` 只用于内部校验摘要和结论边界，不阻断 valuation / thesis / writeup
+- `check_registry` 优先返回结构化 JSON；结构化结果缺失时，Flow 会降级到原始 memo 解析并记录 warning
 - valuation 和 thesis 的校验都已经内收到各自 crew 或下游综合阶段
 
 ## 当前运行时真相

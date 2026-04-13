@@ -13,6 +13,7 @@ from automated_research_report_generator.crews.crew_profile_loader import (
     strip_research_task_profile_fields,
 )
 from automated_research_report_generator.flow.common import PROJECT_ROOT
+from automated_research_report_generator.flow.models import ResearchRegistryCheckResult
 from automated_research_report_generator.llm_config import get_heavy_llm
 from automated_research_report_generator.tools import (
     AddEntryTool,
@@ -169,7 +170,7 @@ class HistoryBackgroundCrew:
         功能：把 YAML 配置、模型参数和通用运行约束组装成 `Agent` 实例。
         实现逻辑：读取对应 agent 配置后，按统一的 LLM 与运行参数返回 Agent。
         可调参数：`config_name`、`tools`、`temperature` 和 `allow_delegation`。
-        默认参数及原因：默认关闭 delegation，原因是只有 manager 负责层级调度。
+        默认参数及原因：默认关闭 delegation，原因是 research 子 crew 改为顺序执行后，各 worker 只负责自己的任务边界。
         """
 
         return Agent(
@@ -191,23 +192,6 @@ class HistoryBackgroundCrew:
             reasoning=False,
             max_reasoning_attempts=None,
             inject_date=True,
-        )
-
-    @agent
-    def manager_agent(self) -> Agent:
-        """
-        目的：定义专题层级调度的 manager agent。
-        功能：只通过委派和追问能力，按固定六段顺序调度 research 任务。
-        实现逻辑：使用独立 manager 配置，不挂载业务工具，并显式开启 delegation。
-        可调参数：YAML agent 配置和 manager 温度。
-        默认参数及原因：默认 `temperature=0.1`，原因是调度判断应稳定收敛，不应发散分析。
-        """
-
-        return self._build_agent(
-            config_name="manager_agent",
-            tools=[],
-            temperature=0.1,
-            allow_delegation=True,
         )
 
     @agent
@@ -361,7 +345,7 @@ class HistoryBackgroundCrew:
             tools=self._qa_tools(),
             async_execution=False,
             output_json=None,
-            output_pydantic=None,
+            output_pydantic=ResearchRegistryCheckResult,
             human_input=False,
             cache=True,
             markdown=False,
@@ -392,11 +376,11 @@ class HistoryBackgroundCrew:
     @crew
     def crew(self) -> Crew:
         """
-        目的：输出专题最终使用的层级 research crew。
-        功能：汇总 4 个 agent 和 6 个 task，并交给 CrewAI 以 hierarchical process 运行。
-        实现逻辑：先确保日志目录存在，再返回带 custom manager agent 的 `Crew` 实例。
-        可调参数：日志路径、缓存、tracing、manager/chat llm 和固定 task 顺序。
-        默认参数及原因：默认采用 `Process.hierarchical`，原因是当前 research 子 crew 仍由 manager 统一调度。
+        目的：输出专题最终使用的 research crew。
+        功能：汇总 4 个 worker agent 和 6 个 task，并交给 CrewAI 以 sequential process 运行。
+        实现逻辑：先确保日志目录存在，再返回按固定 task 顺序执行的 `Crew` 实例。
+        可调参数：日志路径、缓存、tracing 和固定 task 顺序。
+        默认参数及原因：默认采用 `Process.sequential`，原因是当前 research 子 crew 的顺序和上下文依赖已经显式写死。
         """
 
         if isinstance(self.output_log_file_path, str):
@@ -417,10 +401,8 @@ class HistoryBackgroundCrew:
                 self.check_registry(),
                 self.synthesize_and_output(),
             ],
-            process=Process.hierarchical,
+            process=Process.sequential,
             verbose=True,
-            manager_llm=None,
-            manager_agent=self.manager_agent(),
             function_calling_llm=None,
             config=None,
             max_rpm=None,
@@ -434,5 +416,4 @@ class HistoryBackgroundCrew:
             planning_llm=None,
             tracing=True,
             output_log_file=self.output_log_file_path,
-            chat_llm=get_heavy_llm(),
         )

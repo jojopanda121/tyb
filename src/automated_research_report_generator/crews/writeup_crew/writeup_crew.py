@@ -10,37 +10,25 @@ from crewai.project import CrewBase, agent, crew, task
 from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.llm_config import get_heavy_llm
 from automated_research_report_generator.tools.markdown_to_pdf_tool import MarkdownToPdfTool
-from automated_research_report_generator.tools.pdf_page_tools import (
-    ReadPdfPageIndexTool,
-    ReadPdfPagesTool,
-)
 
-# 设计目的：把报告写作和 PDF 导出拆开，让 Markdown 生成和最终导出可以分别验证。
-# 模块功能：提供写作角色，先生成 Markdown，再执行 PDF 导出，并写稳定日志。
+# 设计目的：把最终 Markdown 的非破坏性确认和 PDF 导出拆开，避免 writeup 阶段再次改写正文。
+# 模块功能：提供轻量 report editor，先确认 flow 预生成的 Markdown 已就绪，再执行 PDF 导出，并写稳定日志。
 # 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
 # 可调参数：editor 的 temperature、max_iter 和 `output_log_file_path`。
-# 默认参数及原因：默认 `temperature=0.15`，原因是写作需要表达弹性，但不能脱离证据。
+# 默认参数及原因：默认 `temperature=0.1`，原因是这一步只做确认和导出，不需要额外发散。
 
 PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "writeup_crew.json")
-
-# 设计目的：让写作阶段始终使用同一套 PDF 读取视图，保证引用页码和正文口径一致。
-# 模块功能：提供页码索引与页面正文读取。
-# 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-# 可调参数：后续如果 PDF 工具实现变化，可在这里统一替换。
-# 默认参数及原因：当前直接使用默认构造，因为项目已经把常用行为封装在工具类里。
-shared_pdf_page_index_tool = ReadPdfPageIndexTool()
-shared_pdf_page_reader_tool = ReadPdfPagesTool()
 
 
 @CrewBase
 class WriteupCrew:
     """
-    设计目的：把最终成文和 PDF 导出固定为一个独立阶段，避免和研究判断混在一起。
-    模块功能：集中声明最终报告编辑任务、PDF 导出任务和写作阶段日志配置。
-    实现逻辑：先生成最终 Markdown，再把同一份成文结果交给 PDF 导出工具。
+    设计目的：把最终 Markdown 的确认与 PDF 导出固定为一个独立阶段，避免和上游研究判断混在一起。
+    模块功能：集中声明最终报告确认任务、PDF 导出任务和写作阶段日志配置。
+    实现逻辑：先确认 flow 已经生成最终 Markdown，再把同一份成文结果交给 PDF 导出工具。
     可调参数：YAML 配置、日志路径、模型温度、迭代次数和导出工具。
-    默认参数及原因：默认顺序执行，原因是 PDF 必须建立在已经定稿的 Markdown 之上。
+    默认参数及原因：默认顺序执行，原因是 PDF 必须建立在已经由 flow 定稿的 Markdown 之上。
     """
 
     agents: List[BaseAgent]
@@ -54,10 +42,10 @@ class WriteupCrew:
     def report_editor(self) -> Agent:
         """
         设计目的：集中定义最终报告编辑角色。
-        模块功能：为写作阶段注入 PDF、registry 等基础工具。
+        模块功能：为最终确认与导出阶段提供稳定的语言模型角色。
         实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-        可调参数：agent 配置、工具列表、temperature 和迭代次数。
-        默认参数及原因：默认 `temperature=0.1`，原因是写作需要弹性但必须保持稳。
+        可调参数：agent 配置、temperature 和迭代次数。
+        默认参数及原因：默认 `temperature=0.1`，原因是这里只允许做非破坏性确认，不需要更高表达弹性。
         """
         return Agent(
             config=self.agents_config["report_editor"],  # type: ignore[index]
@@ -83,11 +71,11 @@ class WriteupCrew:
     @task
     def compile_report(self) -> Task:
         """
-        设计目的：定义最终 Markdown 报告编写任务。
+        设计目的：定义最终 Markdown 的非破坏性确认任务。
         模块功能：创建对应 Task 实例。
         实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
         可调参数：任务配置和输出格式。
-        默认参数及原因：默认输出 markdown，原因是这一步本身就是成文产物。
+        默认参数及原因：默认不写 Markdown 文件，原因是最终正文已经由 flow 预先生成，不允许这里再覆盖。
         """
         return Task(
             config=self.tasks_config["compile_report"],  # type: ignore[index]
@@ -97,7 +85,7 @@ class WriteupCrew:
             output_pydantic=None,
             human_input=False,
             cache=True,
-            markdown=True,
+            markdown=False,
         )
 
     @task
@@ -107,7 +95,7 @@ class WriteupCrew:
         模块功能：在编写完成后调用 `MarkdownToPdfTool` 导出 PDF。
         实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
         可调参数：任务配置、上下文依赖和工具列表。
-        默认参数及原因：默认依赖 `compile_report()`，原因是 PDF 必须基于最终 Markdown。
+        默认参数及原因：默认依赖 `compile_report()`，原因是先确认 flow 产物已就绪，再导出会更稳。
         """
 
         return Task(
@@ -129,7 +117,7 @@ class WriteupCrew:
         模块功能：确保日志目录存在，并构造顺序执行的 writeup crew。
         实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
         可调参数：日志路径、缓存、tracing 和 `chat_llm`。
-        默认参数及原因：默认采用 `Process.sequential`，原因是先写 Markdown、再导出 PDF。
+        默认参数及原因：默认采用 `Process.sequential`，原因是先确认 Markdown 就绪、再导出 PDF。
         """
         if isinstance(self.output_log_file_path, str):
             Path(self.output_log_file_path).parent.mkdir(parents=True, exist_ok=True)
