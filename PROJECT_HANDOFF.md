@@ -5,24 +5,27 @@
 这份文件给后续 agent 会话做续接说明。
 先读 `AGENTS.md`，再读本文件，再决定下一步操作。
 
-本版 handoff 更新时间：`2026-04-11`。
-它反映当前工作区真实结构，而不是更早那套带 planning crew 的设计稿。
+本版 handoff 更新时间：`2026-04-14`。
+它反映 `v0.3` 启动阶段的真实工作区结构，而不是更早那套带 planning crew 的设计稿。
 
 ## 仓库快照
 
-- 本地目录：`D:\pyproject\automated_research_report_generator_v0.2`
-- 当前分支：`main-v0.2`
+- 本地目录：`D:\pyproject\automated_research_report_generator_v0.3`
+- 当前分支：`main-v0.3`
+  - 说明：当前工作区已经切到 `v0.3` 分支语义，但代码与依赖基线仍继承自 `v0.2`
 - 当前 `HEAD`：`35c3c8f5b9370bc0d8459fa113e85c373bca5491`
 - 最近提交：`35c3c8f Document planner refactor and align writeup outline`
 - 远端仓库：`https://github.com/tybzhw1230-boop/automated_research_report_generator_v0.1`
 - 当前包名：`automated_research_report_generator`
-- 当前版本：`0.2.0`
+- 当前目标版本：`v0.3`
+- 当前 `pyproject.toml` 版本基线：`0.2.0`
 - 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.1`
 - 当前项目类型：`[tool.crewai].type = "flow"`
 
 ## 当前真实工作状态
 
 当前工作区不是干净状态，文档、research sub-crew 配置和 flow/registry 相关文件都还在持续收敛。
+这是一个刚从 `v0.2` 复制出来、准备推进 `v0.3` 的工作区：代码和依赖基线仍继承 `v0.2`，但文档与设计语义应按 `v0.3` 启动阶段理解。
 不要把最近一次提交当成“唯一真相”，也不要把旧设计稿当成当前接口。
 
 当前已经明确落地的变化有：
