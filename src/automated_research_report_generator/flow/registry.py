@@ -14,7 +14,6 @@ from automated_research_report_generator.flow.common import utc_timestamp
 from automated_research_report_generator.flow.models import (
     EvidenceRecord,
     EvidenceRegistrySnapshot,
-    GateReviewOutput,
     PACK_TO_REGISTRY_TOPIC,
     RegistryEntry,
     RegistryEntryType,
@@ -34,9 +33,9 @@ RESEARCH_PACK_NAMES = [
 ]
 
 # 设计目的：维护 Flow 共享的证据账本，作为 research、valuation、QA 和 writeup 的共同真相源。
-# 模块功能：初始化 registry、加载固定模板、读写统一 entry、登记证据、渲染 Markdown 视图、生成快照和回写 gate 结果。
+# 模块功能：初始化 registry、加载固定模板、读写统一 entry、登记证据、渲染 Markdown 视图和生成快照。
 # 实现逻辑：底层始终存 JSON，同时在每次写盘后自动刷新 Markdown 视图和可选快照文件。
-# 可调参数：模板路径、pack 归一化规则、Markdown 视图格式和 gate 回写策略。
+# 可调参数：模板路径、pack 归一化规则和 Markdown 视图格式。
 # 默认参数及原因：registry 固定保存为 UTF-8 JSON，原因是便于工具读写、调试和人工复查。
 
 
@@ -765,103 +764,3 @@ def save_registry_snapshot(registry_path: str | Path, snapshot_path: str | Path)
         target_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_path, target_path)
     return target_path.as_posix()
-
-
-def build_registry_diff_summary(
-    previous_snapshot_path: str | Path | None,
-    current_snapshot_path: str | Path,
-) -> str:
-    """
-    目的：给 research QA 提供一份短小可用的增量变化摘要。
-    功能：比较两份 registry 快照的 entry 和证据变化，并输出文本摘要。
-    实现逻辑：读取两份快照后比较新增 ID、状态变化和证据数量变化。
-    可调参数：上一轮快照路径和当前快照路径。
-    默认参数及原因：没有上一轮时返回“首次审查”说明，原因是第一轮不存在可比较基准。
-    """
-
-    current_snapshot = load_registry(current_snapshot_path)
-    if previous_snapshot_path is None or not Path(previous_snapshot_path).exists():
-        return "首次审查，没有上一轮 registry 快照可供比较。"
-
-    previous_snapshot = load_registry(previous_snapshot_path)
-    previous_entry_map = {entry.entry_id: entry for entry in previous_snapshot.entries}
-    current_entry_map = {entry.entry_id: entry for entry in current_snapshot.entries}
-    new_entry_ids = [entry_id for entry_id in current_entry_map if entry_id not in previous_entry_map]
-    changed_status_ids = [
-        entry_id
-        for entry_id, entry in current_entry_map.items()
-        if entry_id in previous_entry_map and entry.status != previous_entry_map[entry_id].status
-    ]
-    previous_evidence_ids = {evidence.evidence_id for evidence in previous_snapshot.evidence}
-    current_evidence_ids = {evidence.evidence_id for evidence in current_snapshot.evidence}
-    new_evidence_count = len(current_evidence_ids - previous_evidence_ids)
-
-    lines = [
-        "本轮 registry 变化摘要：",
-        f"- 新增 entry 数：{len(new_entry_ids)}",
-        f"- 状态变化 entry 数：{len(changed_status_ids)}",
-        f"- 新增证据数：{new_evidence_count}",
-    ]
-    if new_entry_ids:
-        lines.append(f"- 新增 entry ID：{', '.join(new_entry_ids[:20])}")
-    if changed_status_ids:
-        lines.append(f"- 状态变化 entry ID：{', '.join(changed_status_ids[:20])}")
-    return "\n".join(lines)
-
-
-def apply_gate_review(
-    registry_path: str | Path,
-    *,
-    stage_name: str,
-    entry_ids: list[str],
-    review: GateReviewOutput,
-) -> None:
-    """
-    目的：把 QA gate 的结果统一回写到 registry。
-    功能：根据 `pass`、`revise`、`stop` 三种状态更新 entry 状态并追加备注。
-    实现逻辑：先决定要回写的 entry 集合，再按状态批量更新并落备注。
-    可调参数：阶段名、entry 列表和 QA 结果。
-    默认参数及原因：`revise/stop` 都回写为 `need_revision`，原因是当前 research 自动返工只区分是否需要修订。
-    """
-
-    affected_entry_ids = list(entry_ids)
-    if not affected_entry_ids and review.affected_packs:
-        affected_entry_ids = entry_ids_for_packs(registry_path, review.affected_packs)
-
-    if review.status == "pass":
-        update_entry_status(
-            registry_path,
-            affected_entry_ids,
-            status="checked",
-            revision_detail=f"{stage_name} gate passed.",
-        )
-    elif review.status == "revise":
-        update_entry_status(
-            registry_path,
-            affected_entry_ids,
-            status="need_revision",
-            revision_detail=(
-                f"缺口：{'; '.join(review.key_gaps)[:500]}；"
-                f"动作：{'; '.join(review.priority_actions)[:500]}"
-            ).strip("；"),
-        )
-    else:
-        update_entry_status(
-            registry_path,
-            affected_entry_ids,
-            status="need_revision",
-            revision_detail=f"{stage_name} gate requested stop. 动作：Stop the workflow and review manually.",
-        )
-
-    note_payload = {
-        "stage_name": stage_name,
-        "status": review.status,
-        "summary": review.summary[:500],
-        "affected_packs": review.affected_packs,
-        "key_gaps": review.key_gaps[:10],
-        "priority_actions": review.priority_actions[:10],
-    }
-    append_registry_note(
-        registry_path,
-        f"gate_review: {json.dumps(note_payload, ensure_ascii=False, sort_keys=True)}",
-    )

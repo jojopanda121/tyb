@@ -20,6 +20,7 @@ RUN_ARTIFACT_DIR_NAME = "md"
 RUN_LOG_DIR_NAME = "logs"
 RUN_PREPROCESS_LOG_FILE_NAME = "preprocess.txt"
 RUN_FLOW_LOG_FILE_NAME = "flow.txt"
+RUN_CONSOLE_LOG_FILE_NAME = "console.txt"
 RUN_DEBUG_MANIFEST_FILE_NAME = "run_manifest.json"
 
 # 设计目的：统一项目内使用的北京时间时区对象。
@@ -39,7 +40,6 @@ CREW_LOG_NAMES = (
     "risk_crew",
     "valuation_crew",
     "investment_thesis_crew",
-    "qa_research",
     "writeup_crew",
 )
 _ACTIVE_PREPROCESS_LOG_PATH: Path | None = None
@@ -182,6 +182,24 @@ def append_text_log_line(path: Path | str, message: str) -> str:
     return normalize_path(resolved)
 
 
+def append_text_log_chunk(path: Path | str, text: str) -> str:
+    """
+    目的：给终端 transcript 一类需要保留原始换行和格式的日志提供统一落盘入口。
+    功能：按原样追加 UTF-8 文本块，不额外注入时间戳或包装格式。
+    实现逻辑：先确保父目录存在，再把传入文本块直接写入目标文件。
+    可调参数：`path` 和 `text`。
+    默认参数及原因：默认保留原始文本，原因是 PowerShell 终端输出本身已经包含第三方库和异常栈的真实格式。
+    """
+
+    if not text:
+        return normalize_path(path)
+    resolved = Path(path).expanduser().resolve()
+    ensure_directory(resolved.parent)
+    with resolved.open("a", encoding="utf-8") as handle:
+        handle.write(text)
+    return normalize_path(resolved)
+
+
 def run_artifact_dir(run_slug: str) -> Path:
     """
     目的：统一取得单次 run 的中间产物目录。
@@ -247,6 +265,18 @@ def run_flow_log_path(run_slug: str) -> str:
     return normalize_path(run_log_dir(run_slug) / RUN_FLOW_LOG_FILE_NAME)
 
 
+def run_console_log_path(run_slug: str) -> str:
+    """
+    目的：给单次 run 的终端 transcript 生成固定日志路径。
+    功能：返回 `.cache/<run_slug>/logs/console.txt` 的标准化字符串路径。
+    实现逻辑：先拿到 run 日志目录，再拼接固定文件名 `console.txt`。
+    可调参数：`run_slug`。
+    默认参数及原因：文件名固定为 `console.txt`，原因是它表达的是整次 PowerShell 可见输出的原始转储。
+    """
+
+    return normalize_path(run_log_dir(run_slug) / RUN_CONSOLE_LOG_FILE_NAME)
+
+
 def run_crew_log_path(run_slug: str, crew_name: str) -> str:
     """
     目的：给单个 crew 生成固定日志路径。
@@ -283,6 +313,7 @@ def write_run_debug_manifest(
     log_dir = run_log_dir(run_slug)
     flow_log_file_path = normalize_path(log_dir / RUN_FLOW_LOG_FILE_NAME)
     preprocess_log_file_path = normalize_path(log_dir / RUN_PREPROCESS_LOG_FILE_NAME)
+    console_log_file_path = normalize_path(log_dir / RUN_CONSOLE_LOG_FILE_NAME)
     manifest_path = normalize_path(artifact_dir / RUN_DEBUG_MANIFEST_FILE_NAME)
     crew_log_paths = {crew_name: normalize_path(log_dir / f"{crew_name}.txt") for crew_name in CREW_LOG_NAMES}
     manifest = {
@@ -307,6 +338,7 @@ def write_run_debug_manifest(
         "preprocess_log_file_path": preprocess_log_file_path,
         "run_log_file_path": flow_log_file_path,
         "flow_log_file_path": flow_log_file_path,
+        "console_log_file_path": console_log_file_path,
         "crew_log_paths": crew_log_paths,
     }
 

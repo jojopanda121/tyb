@@ -6,8 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from automated_research_report_generator.flow.common import utc_timestamp
 
-# 设计目的：集中定义 Flow、registry、QA gate 和 checkpoint 共用的数据模型。
-# 模块功能：统一约束 registry entry、证据、QA 结果和整条 Flow 状态。
+# 设计目的：集中定义 Flow、registry、内部校验摘要和 checkpoint 共用的数据模型。
+# 模块功能：统一约束 registry entry、证据和整条 Flow 状态。
 # 实现逻辑：使用 Pydantic 模型承接跨模块共享的数据，并只保留当前 deterministic registry 真正使用的字段。
 # 可调参数：各类 `Literal` 枚举值、pack/topic 映射和字段默认值。
 # 默认参数及原因：时间字段统一走 `utc_timestamp()`，列表字段统一走 `default_factory`，原因是多轮运行更稳定。
@@ -33,7 +33,6 @@ RegistryEvidenceStance = Literal["support", "conflict", "context"]
 CrewOwner = Literal[
     "valuation_crew",
     "investment_thesis_crew",
-    "qa_crew",
     "history_background_crew",
     "industry_crew",
     "business_crew",
@@ -43,8 +42,6 @@ CrewOwner = Literal[
     "risk_crew",
     "writeup_crew",
 ]
-ReviewGateStatus = Literal["pass", "revise", "stop"]
-
 PACK_TO_REGISTRY_TOPIC: dict[str, RegistryTopic] = {
     "history_background_pack": "history",
     "industry_pack": "industry",
@@ -262,28 +259,12 @@ class EvidenceRegistrySnapshot(BaseModel):
     updated_at: str = Field(default_factory=utc_timestamp)
 
 
-class GateReviewOutput(BaseModel):
-    """
-    目的：统一 QA gate 的结构化输出格式。
-    功能：保存 gate 状态、摘要、关键缺口、优先动作和受影响的 pack。
-    实现逻辑：让 research QA 的结果都落到同一模型上。
-    可调参数：各字段由 QA crew 输出时填写。
-    默认参数及原因：列表字段默认空列表，原因是通过场景常常不需要额外动作。
-    """
-
-    status: ReviewGateStatus
-    summary: str
-    key_gaps: list[str] = Field(default_factory=list)
-    priority_actions: list[str] = Field(default_factory=list)
-    affected_packs: list[str] = Field(default_factory=list)
-
-
 class ResearchFlowState(BaseModel):
     """
     目的：统一保存整条 Flow 在各阶段共享的运行状态。
-    功能：承接输入 PDF、各 pack 路径、QA 结果、checkpoint 产物和最终报告路径。
+    功能：承接输入 PDF、各 pack 路径、内部校验摘要、checkpoint 产物和最终报告路径。
     实现逻辑：把跨阶段需要传递的路径、结果和循环计数集中到一个状态模型里。
-    可调参数：各路径字段、QA 结果字段、反馈文本和循环计数器。
+    可调参数：各路径字段、内部摘要路径和循环计数器。
     默认参数及原因：默认从空值起步，原因是不同阶段会逐步补齐状态，不应预设业务内容。
     """
 
@@ -314,18 +295,10 @@ class ResearchFlowState(BaseModel):
 
     investment_thesis_path: str = ""
     diligence_questions_path: str = ""
-
-    last_research_qa_feedback: str = ""
-    coverage_report_research: GateReviewOutput | None = None
-    qa_report_research: GateReviewOutput | None = None
-    coverage_report_valuation: GateReviewOutput | None = None
-    qa_report_valuation: GateReviewOutput | None = None
-    coverage_report_thesis: GateReviewOutput | None = None
-    qa_report_thesis: GateReviewOutput | None = None
+    research_internal_review_summary_path: str = ""
 
     final_report_markdown_path: str = ""
     final_report_pdf_path: str = ""
 
-    research_loop_count: int = 0
     valuation_loop_count: int = 0
     thesis_loop_count: int = 0

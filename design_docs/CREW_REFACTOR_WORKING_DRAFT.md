@@ -16,8 +16,7 @@
 | `risk_crew` | 关键经营与外部风险识别 | 文档摘要、页索引、registry | `risk_pack` |
 | `valuation_crew` | 可比估值、内在价值、综合估值 | 基础输入 + peer_info/finance/ops/risk packs | `peers_pack`、`intrinsic_value_pack`、`valuation_pack` |
 | `investment_thesis_crew` | 投资逻辑与尽调问题提炼 | 全部 research packs + peers/valuation + registry | `investment_thesis`、`diligence_questions` |
-| `qa_crew` | research 阶段外部 QA | 7 个 research packs + registry | `coverage_report_research` |
-| `writeup_crew` | 汇编最终 Markdown 与 PDF | 上游 packs + thesis + QA 摘要 | 最终 `.md` 和 `.pdf` |
+| `writeup_crew` | 汇编最终 Markdown 与 PDF | 上游 packs + thesis + research 内部校验摘要 | 最终 `.md` 和 `.pdf` |
 
 当前不再存在独立 `planning_crew`。planning 的职责已经收口到 Flow 的 `build_research_plan` 节点。
 
@@ -31,16 +30,18 @@
   - `extract_file_fact_agent`
   - `qa_check_agent`
   - `synthesizing_agent`
-- 每个 crew 当前都有 4 个 task
-  - `search_facts`
+- 每个 crew 当前都有 6 个 task
   - `extract_file_facts`
+  - `record_extract_registry`
+  - `search_facts`
+  - `record_search_registry`
   - `check_registry`
   - `synthesize_and_output`
 
 当前统一输入边界：
 
 - `_base_inputs()` 提供基础文档上下文
-- Flow 额外注入 `pack_name`、`pack_title`、`owner_crew`、`pack_output_path`、`loop_reason`、`qa_feedback`
+- Flow 额外注入 `pack_name`、`pack_title`、`owner_crew`、`pack_output_path`、`loop_reason`
 - Flow 按 crew 需要补充上游 pack 文本
 
 当前统一行为边界：
@@ -90,14 +91,13 @@
 1. `prepare_evidence`
 2. `build_research_plan`
 3. `run_research_crew`
-4. `review_research_gate`
-5. `run_valuation_crew`
-6. `run_investment_thesis_crew`
-7. `publish_if_passed`
+4. `run_valuation_crew`
+5. `run_investment_thesis_crew`
+6. `publish_if_passed`
 
 当前迭代规则：
 
-- research 有外部 gate，可自动返工 1 次
+- research 不再有外部 gate，固定单轮执行
 - valuation 不走外部 gate
 - thesis 不走外部 gate
 
@@ -106,7 +106,7 @@
 - research 产物：`.cache/<run_slug>/md/research/iter_XX/`
 - valuation 产物：`.cache/<run_slug>/md/valuation/iter_XX/`
 - thesis 产物：`.cache/<run_slug>/md/thesis/iter_XX/`
-- QA 产物：`.cache/<run_slug>/md/qa/research/iter_XX/`
+- research 内部校验摘要：`.cache/<run_slug>/md/research/iter_XX/08_research_internal_registry_checks.md`
 - crew 日志：`.cache/<run_slug>/logs/<crew_name>.txt`
 
 ## 5. 当前 writeup 边界

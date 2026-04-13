@@ -23,8 +23,11 @@ compile_report:
       {investment_thesis_text}
     - 尽调问题：
       {diligence_questions_text}
-    - 最终 QA 备注：
+    - Research 内部校验摘要：
       {final_qa_summary}
+
+    说明：
+    - `final_qa_summary` 的语义是 7 个 research packs 的 `check_registry` 输出汇总，不是外部 QA crew 的 gate 结果。
 
     执行要求：
     - 输出必须是一份单独的 Markdown 报告。
@@ -64,7 +67,7 @@ compile_report:
     ## 9. 综合估值
         完整插入 {valuation_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
 
-    ## 10. QA摘要与结论边界
+    ## 10. Research 内部校验摘要与结论边界
         完整插入 {final_qa_summary} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
         
   agent: report_editor

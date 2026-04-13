@@ -30,7 +30,7 @@
 - `planning_crew` 已经移除
 - planning 已改成固定模板初始化，不再生成 `research_scope`、`question_tree`、`seed_evidence_map`
 - registry 已切到新的 `entry` 字段体系
-- research 阶段保留外部 QA gate，valuation 与 thesis 不再走外部 gate
+- research 阶段改为内部 `check_registry` 汇总，不再走外部 QA gate
 - 运行产物主路径已经切到 `.cache/<run_slug>/`
 
 继续工作前，必须先区分三件事：
@@ -73,12 +73,12 @@
 - 后续阶段 crews
   - `valuation_crew`
   - `investment_thesis_crew`
-  - `qa_crew`
   - `writeup_crew`
 
 当前不再存在：
 
 - `src/automated_research_report_generator/crews/planning_crew/`
+- `src/automated_research_report_generator/crews/qa_crew/`
 - `src/automated_research_report_generator/crews/research_subcrew_base.py`
 
 ## 当前接口边界
@@ -125,24 +125,22 @@
 3. `run_research_crew`
    - 顺序执行 7 个 research sub-crews
    - 产出 7 个 research packs
-4. `review_research_gate`
-   - 只做 research 阶段外部 QA
-   - 如失败，只定向重跑 `affected_packs`
-5. `run_valuation_crew`
+   - 汇总 7 个 `check_registry` 输出，生成 `08_research_internal_registry_checks.md`
+4. `run_valuation_crew`
+   - research 完成后直接进入 valuation
    - 产出 `peers_pack`、`intrinsic_value_pack`、`valuation_pack`
-6. `run_investment_thesis_crew`
+5. `run_investment_thesis_crew`
    - 产出 `investment_thesis`、`diligence_questions`
    - 可读取完整 registry 快照
-7. `publish_if_passed`
+6. `publish_if_passed`
    - 汇总上游材料
    - 调用 writeup crew 生成最终 Markdown 与 PDF
 
-QA gate 规则：
+当前校验规则：
 
-- 只有 `research` 阶段保留外部 gate
-- `max_research_loops = 1`
-- 换算成总执行次数，research 最多执行 2 次
-- 第二次仍未通过时，Flow 自动 `force pass`
+- `research` 阶段不再保留外部 gate
+- 7 个 research sub-crews 各自保留内部 `check_registry` 任务
+- Flow 会把 7 个 `check_registry` 输出汇总成 `08_research_internal_registry_checks.md`
 - valuation 和 thesis 的校验都已经内收到各自 crew 或下游综合阶段
 
 ## 当前运行时真相
@@ -163,7 +161,6 @@ QA gate 规则：
   - `research/iter_XX/`
   - `valuation/iter_XX/`
   - `thesis/iter_XX/`
-  - `qa/research/iter_XX/`
   - `registry/`
   - `checkpoints/`
   - `run_manifest.json`
@@ -224,6 +221,6 @@ QA gate 规则：
 这次 handoff 之后，当前已确认的边界是：
 
 - deterministic planner 已经落地，模板文件是 `flow/config/registry_template.yaml`
-- 7 个 research sub-crews、统一 registry entry 模型、research-only QA 和 checkpoint 机制已经落地
+- 7 个 research sub-crews、统一 registry entry 模型、research 内部校验摘要和 checkpoint 机制已经落地
 - registry/tool 链路上的旧 question-style 兼容接口已移除，当前以 `entry` 命名为准
 - `planning_crew` 已删除，不应再作为当前结构展示

@@ -5,20 +5,20 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import automated_research_report_generator.flow.research_flow as research_flow_module
+from automated_research_report_generator.flow.common import CREW_LOG_NAMES
 from automated_research_report_generator.flow.document_metadata import PdfDocumentMetadataPayload
-from automated_research_report_generator.flow.models import GateReviewOutput
 from automated_research_report_generator.flow.registry import (
     initialize_registry,
     load_registry,
     load_registry_template,
 )
 from automated_research_report_generator.flow.research_flow import (
-    RESEARCH_GATE_FORCE_PASS_EVENT,
-    RESEARCH_GATE_RETRY_EVENT,
     ResearchReportFlow,
     THESIS_STAGE_COMPLETED_NO_GATE_EVENT,
     VALUATION_STAGE_COMPLETED_NO_GATE_EVENT,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _build_flow(tmp_path) -> ResearchReportFlow:
@@ -145,7 +145,7 @@ def test_prepare_evidence_generates_document_metadata_directly_in_run_indexing(t
     monkeypatch.setattr(
         research_flow_module,
         "initialize_registry",
-        lambda company_name, industry, registry_path: None,
+        lambda company_name, industry, registry_path, periods=None: None,
     )
     monkeypatch.setattr(
         research_flow_module,
@@ -212,33 +212,56 @@ def test_build_research_plan_reinitializes_registry_from_deterministic_template(
     assert "planning_crew" not in captured_checkpoint["payload"]["owner_distribution"]
 
 
-def test_run_research_stage_runs_all_subcrews_then_targeted_rerun_only_updates_affected_pack(tmp_path, monkeypatch):
+def test_run_research_stage_writes_internal_review_summary_and_checkpoint(tmp_path, monkeypatch):
     """
-    目的：验证 research 阶段首轮会跑 7 个子 crew，而返工只会定向重跑受影响 pack。
-    功能：检查首轮输出写入 `iter_01/`，返工只重跑 `business_pack` 并把该 pack 路径切到 `iter_02/`。
-    实现逻辑：替换 `RESEARCH_SUB_CREW_SPECS` 为假 crew 列表后分别执行首轮和返工轮次，再断言输入目录与 state 路径。
-    可调参数：`tmp_path` 用于隔离临时目录，`monkeypatch` 用于替换真实 crew。
-    默认参数及原因：默认不生成真实 Markdown 文件，原因是本测试只关注编排与状态切换。
+    目的：验证 research 阶段会提取各 sub-crew 的 `check_registry` 输出并生成内部校验摘要。
+    功能：检查 pack 输出路径、摘要文件 `08_research_internal_registry_checks.md` 和 `cp03_research_internal_checks` 同步写出。
+    实现逻辑：替换 `RESEARCH_SUB_CREW_SPECS` 为假 crew 列表，构造带 `tasks_output` 的假结果后执行 `_run_research_stage()` 断言状态与文件内容。
+    可调参数：`tmp_path` 用于隔离临时路径，`monkeypatch` 用于替换真实 crew。
+    默认参数及原因：默认让一个 pack 缺失 `check_registry` 输出，原因是要同时锁住正常汇总和缺口占位行为。
     """
 
     flow = _build_flow(tmp_path)
     captured_runs: list[dict[str, str]] = []
+    captured_checkpoints: list[tuple[str, dict[str, object]]] = []
 
     class FakeSubCrew:
         """
         目的：替换真实 sub-crew，避免测试触发模型调用。
-        功能：拦截 `kickoff()` 输入，供测试断言。
-        实现逻辑：提供与真实 crew 兼容的 `crew().kickoff()` 接口，并把输入写入外层列表。
+        功能：记录 kickoff 输入，并返回带固定 `tasks_output` 的假结果。
+        实现逻辑：按照当前 6-task 链路构造 6 个输出对象，其中第 5 个对应 `check_registry`。
         可调参数：无。
-        默认参数及原因：默认只记录输入不生成产物，原因是本测试只验证 flow 调度。
+        默认参数及原因：默认只返回最小必要任务输出，原因是本测试关注的是编排与摘要提取。
         """
 
         output_log_file_path = None
+        crew_name = "fake_crew"
+        pack_title = "假包"
+        pack_focus = ""
+        output_title = "假包"
+        search_guidance = ""
+        extract_guidance = ""
+        qa_guidance = ""
+        synthesize_guidance = ""
+        output_skeleton = ""
 
         def crew(self):
             class FakeRunner:
                 def kickoff(self, inputs):
                     captured_runs.append(inputs.copy())
+                    pack_name = inputs["pack_name"]
+                    if pack_name == "business_pack":
+                        task_outputs = []
+                    else:
+                        task_outputs = [
+                            SimpleNamespace(name="extract_file_facts", raw="extract"),
+                            SimpleNamespace(name="record_extract_registry", raw="record extract"),
+                            SimpleNamespace(name="search_facts", raw="search"),
+                            SimpleNamespace(name="record_search_registry", raw="record search"),
+                            SimpleNamespace(name="check_registry", raw=f"{pack_name} check memo"),
+                            SimpleNamespace(name="synthesize_and_output", raw="synth"),
+                        ]
+                    return SimpleNamespace(tasks_output=task_outputs)
 
             return FakeRunner()
 
@@ -272,149 +295,141 @@ def test_run_research_stage_runs_all_subcrews_then_targeted_rerun_only_updates_a
         },
     ]
 
+    def fake_write_checkpoint(checkpoint_code: str, payload: dict[str, object]) -> str:
+        """
+        目的：记录 research 阶段写出的 checkpoint 内容。
+        功能：把 checkpoint 代号和 payload 收集到列表，供测试断言。
+        实现逻辑：直接追加到外层列表并返回占位路径。
+        可调参数：`checkpoint_code` 和 `payload`。
+        默认参数及原因：默认不落真实 checkpoint 文件，原因是这里只关注字段值本身。
+        """
+
+        captured_checkpoints.append((checkpoint_code, payload))
+        return "checkpoint.json"
+
     monkeypatch.setattr(research_flow_module, "RESEARCH_SUB_CREW_SPECS", fake_specs)
     monkeypatch.setattr(flow, "_prepare_tool_context", lambda: None)
     monkeypatch.setattr(flow, "_configure_crew_log", lambda crew_instance, log_path: crew_instance)
-    monkeypatch.setattr(flow, "_write_checkpoint", lambda checkpoint_code, payload: "checkpoint.json")
+    monkeypatch.setattr(flow, "_write_checkpoint", fake_write_checkpoint)
     monkeypatch.setattr(flow, "_register_pack_output", lambda path, pack_name, title: None)
     monkeypatch.setattr(flow, "_log_flow", lambda message: "flow.log")
 
-    flow._run_research_stage("initial")
-    flow.state.research_loop_count = 1
-    flow._run_research_stage("qa_revision", targeted_packs=["business_pack"], qa_feedback="补客户结构缺口")
+    result = flow._run_research_stage("initial")
 
-    iter_01_dir = (Path(flow.state.run_cache_dir) / "research" / "iter_01").resolve().as_posix()
-    iter_02_dir = (Path(flow.state.run_cache_dir) / "research" / "iter_02").resolve().as_posix()
+    research_dir = (Path(flow.state.run_cache_dir) / "research" / "iter_01").resolve()
+    summary_path = research_dir / "08_research_internal_registry_checks.md"
+    summary_text = summary_path.read_text(encoding="utf-8")
 
-    assert [run["pack_name"] for run in captured_runs[:3]] == [
+    assert [run["pack_name"] for run in captured_runs] == [
         "history_background_pack",
         "industry_pack",
         "business_pack",
     ]
-    assert captured_runs[0]["pack_output_path"] == f"{iter_01_dir}/01_history_background_pack.md"
-    assert captured_runs[2]["pack_output_path"] == f"{iter_01_dir}/03_business_pack.md"
-    assert captured_runs[3]["pack_name"] == "business_pack"
-    assert captured_runs[3]["pack_output_path"] == f"{iter_02_dir}/03_business_pack.md"
-    assert captured_runs[3]["qa_feedback"] == "补客户结构缺口"
-    assert flow.state.history_background_pack_path == f"{iter_01_dir}/01_history_background_pack.md"
-    assert flow.state.industry_pack_path == f"{iter_01_dir}/02_industry_pack.md"
-    assert flow.state.business_pack_path == f"{iter_02_dir}/03_business_pack.md"
+    assert captured_runs[0]["pack_output_path"] == f"{research_dir.as_posix()}/01_history_background_pack.md"
+    assert flow.state.history_background_pack_path == f"{research_dir.as_posix()}/01_history_background_pack.md"
+    assert flow.state.business_pack_path == f"{research_dir.as_posix()}/03_business_pack.md"
+    assert result == summary_path.as_posix()
+    assert flow.state.research_internal_review_summary_path == summary_path.as_posix()
+    assert "# Research 内部校验摘要" in summary_text
+    assert "history_background_pack check memo" in summary_text
+    assert "industry_pack check memo" in summary_text
+    assert "本 pack 未返回 `check_registry` 输出。" in summary_text
+    assert captured_checkpoints[-1][0] == "cp03_research_internal_checks"
+    assert captured_checkpoints[-1][1]["summary_path"] == summary_path.as_posix()
+    assert captured_checkpoints[-1][1]["covered_packs"] == [
+        "history_background_pack",
+        "industry_pack",
+        "business_pack",
+    ]
+    assert captured_checkpoints[-1][1]["missing_packs"] == ["business_pack"]
 
 
-def test_review_research_gate_uses_affected_packs_and_stores_feedback(tmp_path, monkeypatch):
+def test_publish_if_passed_uses_internal_review_summary_file(tmp_path, monkeypatch):
     """
-    目的：验证 research gate 会根据 `affected_packs` 定向回写 registry，并缓存可直接给下轮 crew 的反馈文本。
-    功能：检查 judgment entry 查询只查询受影响 pack，`apply_gate_review()` 只回写一次，且反馈文本被存入 state。
-    实现逻辑：替换 `_run_qa_stage()`、`entry_ids_for_packs()` 和 `apply_gate_review()`，再调用 `review_research_gate()` 断言参数。
-    可调参数：`tmp_path` 用于构造最小 Flow 状态，`monkeypatch` 用于替换依赖。
-    默认参数及原因：默认不执行真实 QA，原因是这个测试只关心 gate 编排和回写边界。
-    """
-
-    flow = _build_flow(tmp_path)
-    flow.state.history_background_pack_path = "history.md"
-    flow.state.industry_pack_path = "industry.md"
-    flow.state.business_pack_path = "business.md"
-    flow.state.peer_info_pack_path = "peer_info.md"
-    flow.state.finance_pack_path = "finance.md"
-    flow.state.operating_metrics_pack_path = "metrics.md"
-    flow.state.risk_pack_path = "risk.md"
-
-    captured_pack_names: list[tuple[str, ...]] = []
-    applied_stage_names: list[str] = []
-    coverage = GateReviewOutput(
-        status="revise",
-        summary="业务包仍缺客户集中度证据。",
-        key_gaps=["客户集中度证据不足"],
-        priority_actions=["补充前五大客户收入占比与来源页码"],
-        affected_packs=["business_pack"],
-    )
-    deferred_consistency = GateReviewOutput(status="pass", summary="research consistency deferred")
-
-    monkeypatch.setattr(flow, "_compose_stage_bundle", lambda paths: "|".join(paths))
-    monkeypatch.setattr(flow, "_run_qa_stage", lambda **kwargs: (coverage, deferred_consistency))
-    monkeypatch.setattr(
-        research_flow_module,
-        "entry_ids_for_packs",
-        lambda registry_path, pack_names, entry_types=None: captured_pack_names.append(tuple(pack_names)) or ["judgment_business"],
-    )
-    monkeypatch.setattr(
-        research_flow_module,
-        "apply_gate_review",
-        lambda registry_path, *, stage_name, entry_ids, review: applied_stage_names.append(stage_name),
-    )
-    monkeypatch.setattr(flow, "_write_checkpoint", lambda checkpoint_code, payload: "checkpoint.json")
-
-    result = flow.review_research_gate()
-
-    assert result == {"coverage_status": "revise", "consistency_status": "pass"}
-    assert captured_pack_names == [("business_pack",)]
-    assert applied_stage_names == ["research_qa"]
-    assert "业务包仍缺客户集中度证据" in flow.state.last_research_qa_feedback
-    assert "business_pack" in flow.state.last_research_qa_feedback
-
-
-def test_run_qa_stage_passes_registry_markdown_and_diff(tmp_path, monkeypatch):
-    """
-    目的：验证 `_run_qa_stage()` 会把 registry Markdown 视图和 diff 摘要传给 QA。
-    功能：检查传入 QA crew 的输入包含 `registry_markdown_text`、`registry_diff_text` 和 `registry_full_text`。
-    实现逻辑：构造最小 registry 与基础文件，替换 `QACrew` 为假对象后直接调用 `_run_qa_stage()` 断言实际输入。
-    可调参数：`tmp_path` 用于隔离临时文件，`monkeypatch` 用于替换 QA crew。
-    默认参数及原因：默认只模拟 coverage 任务输出，原因是 research 阶段当前只关心外部 QA gate。
+    目的：验证 writeup 输入的 `final_qa_summary` 已改为 research 内部校验摘要文件内容。
+    功能：检查 `publish_if_passed()` 不再读取旧外部 QA 汇总，而是直接注入摘要 Markdown 正文。
+    实现逻辑：构造最小 flow 和假 writeup crew，写入摘要文件后执行 `publish_if_passed()` 断言输入。
+    可调参数：`tmp_path` 用于隔离临时文件，`monkeypatch` 用于替换 writeup crew。
+    默认参数及原因：默认只校验关键输入，不关心最终 Markdown/PDF 的真实生成。
     """
 
     flow = _build_flow(tmp_path)
-    flow.state.investment_thesis_path = (tmp_path / "thesis.md").as_posix()
-    flow.state.diligence_questions_path = (tmp_path / "diligence.md").as_posix()
-    Path(flow.state.investment_thesis_path).write_text("thesis body", encoding="utf-8")
-    Path(flow.state.diligence_questions_path).write_text("diligence body", encoding="utf-8")
+    summary_path = tmp_path / "08_research_internal_registry_checks.md"
+    summary_text = "# Research 内部校验摘要\n\n来自 check_registry 的汇总。"
+    summary_path.write_text(summary_text, encoding="utf-8")
+    flow.state.research_internal_review_summary_path = summary_path.as_posix()
+    captured_inputs: dict[str, str] = {}
 
-    captured: dict[str, object] = {}
+    class FakeWriteupCrew:
+        """
+        目的：替换真实 writeup crew，避免测试触发模型调用和 PDF 导出。
+        功能：记录 kickoff 输入，供测试断言。
+        实现逻辑：提供与真实 crew 兼容的 `crew().kickoff()` 接口。
+        可调参数：无。
+        默认参数及原因：默认只记录输入不生成产物，原因是这里只验证 publish 接线。
+        """
 
-    class FakeQACrew:
-        def __init__(self):
-            self.output_log_file_path = None
-            self.run_consistency_review = True
+        output_log_file_path = None
 
         def crew(self):
-            current_crew = self
-
             class FakeRunner:
                 def kickoff(self, inputs):
-                    captured["inputs"] = inputs
-                    captured["run_consistency_review"] = current_crew.run_consistency_review
-                    return SimpleNamespace(
-                        tasks_output=[
-                            SimpleNamespace(
-                                json_dict={
-                                    "status": "pass",
-                                    "summary": "coverage ok",
-                                    "key_gaps": [],
-                                    "priority_actions": [],
-                                    "affected_packs": [],
-                                },
-                                pydantic=None,
-                            )
-                        ]
-                    )
+                    captured_inputs.update(inputs)
 
             return FakeRunner()
 
-    monkeypatch.setattr(research_flow_module, "QACrew", FakeQACrew)
-    monkeypatch.setattr(flow, "_current_registry_diff_summary", lambda stage_name: "diff summary")
+    monkeypatch.setattr(research_flow_module, "WriteupCrew", FakeWriteupCrew)
+    monkeypatch.setattr(flow, "_prepare_tool_context", lambda: None)
+    monkeypatch.setattr(flow, "_configure_crew_log", lambda crew_instance, log_path: crew_instance)
+    monkeypatch.setattr(flow, "_write_manifest_from_state", lambda status: "manifest.json")
+    monkeypatch.setattr(flow, "_write_checkpoint", lambda checkpoint_code, payload: "checkpoint.json")
+    monkeypatch.setattr(flow, "_log_flow", lambda message: "flow.log")
 
-    coverage, consistency = flow._run_qa_stage(
-        stage_name="research",
-        stage_focus="研究重点",
-        stage_bundle="research-bundle",
-        run_consistency_review=False,
-    )
+    flow.publish_if_passed()
 
-    assert coverage.status == "pass"
-    assert consistency.status == "pass"
-    assert captured["run_consistency_review"] is False
-    assert "# 证据注册表：" in captured["inputs"]["registry_markdown_text"]
-    assert captured["inputs"]["registry_diff_text"] == "diff summary"
-    assert '"entries"' in captured["inputs"]["registry_full_text"]
+    assert captured_inputs["final_qa_summary"] == summary_text
+
+
+def test_publish_if_passed_uses_placeholder_when_internal_review_summary_missing(tmp_path, monkeypatch):
+    """
+    目的：验证 research 内部校验摘要缺失时，writeup 仍会收到明确占位文本。
+    功能：检查 `final_qa_summary` 不会留空，而是写入“本轮未生成内部校验摘要”占位。
+    实现逻辑：不设置摘要文件路径，替换 writeup crew 后执行 `publish_if_passed()` 断言输入。
+    可调参数：`tmp_path` 用于隔离临时文件，`monkeypatch` 用于替换 writeup crew。
+    默认参数及原因：默认只验证占位回退行为，原因是这是新设计的重要兜底语义。
+    """
+
+    flow = _build_flow(tmp_path)
+    captured_inputs: dict[str, str] = {}
+
+    class FakeWriteupCrew:
+        """
+        目的：替换真实 writeup crew，避免测试触发模型调用和 PDF 导出。
+        功能：记录 kickoff 输入，供测试断言。
+        实现逻辑：提供与真实 crew 兼容的 `crew().kickoff()` 接口。
+        可调参数：无。
+        默认参数及原因：默认只记录输入不生成产物，原因是这里只验证 publish 接线。
+        """
+
+        output_log_file_path = None
+
+        def crew(self):
+            class FakeRunner:
+                def kickoff(self, inputs):
+                    captured_inputs.update(inputs)
+
+            return FakeRunner()
+
+    monkeypatch.setattr(research_flow_module, "WriteupCrew", FakeWriteupCrew)
+    monkeypatch.setattr(flow, "_prepare_tool_context", lambda: None)
+    monkeypatch.setattr(flow, "_configure_crew_log", lambda crew_instance, log_path: crew_instance)
+    monkeypatch.setattr(flow, "_write_manifest_from_state", lambda status: "manifest.json")
+    monkeypatch.setattr(flow, "_write_checkpoint", lambda checkpoint_code, payload: "checkpoint.json")
+    monkeypatch.setattr(flow, "_log_flow", lambda message: "flow.log")
+
+    flow.publish_if_passed()
+
+    assert captured_inputs["final_qa_summary"] == "# Research 内部校验摘要\n\n本轮未生成内部校验摘要。\n"
 
 
 def test_run_valuation_stage_uses_peer_info_and_operating_metrics_inputs(tmp_path, monkeypatch):
@@ -495,3 +510,28 @@ def test_run_investment_thesis_crew_routes_with_no_gate_event(tmp_path, monkeypa
 
     assert getattr(ResearchReportFlow.run_investment_thesis_crew, "__is_router__", False) is True
     assert flow.run_investment_thesis_crew() == THESIS_STAGE_COMPLETED_NO_GATE_EVENT
+
+
+def test_external_research_qa_cleanup_is_complete():
+    """
+    目的：锁住 research 外部 QA gate 的关键接线和日志位点已经被彻底清理。
+    功能：检查 `qa_research` 日志槽位、旧 qa_crew 文件和旧路由方法都不再存在。
+    实现逻辑：直接读取当前模块常量、文件路径和类属性做静态断言。
+    可调参数：当前无。
+    默认参数及原因：固定检查最关键的死代码入口，原因是这能防止旧 gate 骨架被悄悄带回。
+    """
+
+    legacy_qa_crew_file = (
+        PROJECT_ROOT
+        / "src"
+        / "automated_research_report_generator"
+        / "crews"
+        / "qa_crew"
+        / "qa_crew.py"
+    )
+
+    assert "qa_research" not in CREW_LOG_NAMES
+    assert not legacy_qa_crew_file.exists()
+    assert not hasattr(ResearchReportFlow, "review_research_gate")
+    assert not hasattr(ResearchReportFlow, "route_research_gate")
+    assert not hasattr(ResearchReportFlow, "rerun_research")

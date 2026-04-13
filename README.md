@@ -1,6 +1,6 @@
 # Automated Research Report Generator v0.2
 
-一个基于 CrewAI Flow 的买方研究报告生成项目。当前仓库的真实主线已经切到 `v0.2` 的 registry-centric 结构：planning 不再依赖单独的 planning crew，而是用固定 YAML 模板初始化 research registry；7 个 research sub-crews 围绕统一 registry 工作；只有 research 阶段保留外部 QA gate。
+一个基于 CrewAI Flow 的买方研究报告生成项目。当前仓库的真实主线已经切到 `v0.2` 的 registry-centric 结构：planning 不再依赖单独的 planning crew，而是用固定 YAML 模板初始化 research registry；7 个 research sub-crews 围绕统一 registry 工作；research 完成后直接进入 valuation，并把各 pack 的 `check_registry` 输出汇总成内部校验摘要。
 
 ## 当前实现边界
 
@@ -16,8 +16,8 @@
 ## 当前设计原则
 
 - planning 只做确定性初始化：`build_research_plan` 直接加载 `flow/config/registry_template.yaml`，不再生成独立 planning 产物。
-- registry 是研究主接口：research、valuation、thesis、QA 都围绕 `evidence_registry.json` 协作。
-- research-only QA：外部 gate 只保留在 research 阶段；valuation 和 thesis 不再经过外部 gate。
+- registry 是研究主接口：research、valuation、thesis 和 writeup 都围绕 `evidence_registry.json` 协作。
+- research 内部自校验：research 不再经过外部 gate，而是汇总 7 个 sub-crew 的 `check_registry` 输出来形成内部校验摘要。
 - 运行目录按 run 隔离：单次运行统一写入 `.cache/<run_slug>/`，方便排查单轮产物、日志和快照。
 
 ## 当前 Flow 链路
@@ -33,16 +33,15 @@
 3. `run_research_crew`
    - 顺序执行 7 个 research sub-crews
    - 产出 `history_background`、`industry`、`business`、`peer_info`、`finance`、`operating_metrics`、`risk` 七个 pack
-4. `review_research_gate`
-   - 对 research 阶段做覆盖度和跨 pack 一致性复核
-   - 如失败，只定向重跑 `affected_packs`
-5. `run_valuation_crew`
+   - 汇总 7 个 `check_registry` 输出，生成 `08_research_internal_registry_checks.md`
+4. `run_valuation_crew`
+   - research 完成后直接进入 valuation
    - 产出 `peers_pack`、`intrinsic_value_pack`、`valuation_pack`
    - 不再经过外部 valuation gate
-6. `run_investment_thesis_crew`
+5. `run_investment_thesis_crew`
    - 产出 `investment_thesis` 和 `diligence_questions`
    - 可读取完整 registry 快照，但不经过外部 thesis gate
-7. `publish_if_passed`
+6. `publish_if_passed`
    - 汇总上游 pack
    - 生成最终 Markdown 与 PDF
 
@@ -62,8 +61,6 @@
   - `valuation_crew`
   - `investment_thesis_crew`
   - `writeup_crew`
-- 1 个外部 QA crew
-  - `qa_crew`
 
 当前不再有 `planning_crew`，也不再保留共享 `research_subcrew_base.py` 这类中间抽象。
 
@@ -123,7 +120,6 @@
 │  ├─ financial_crew.txt
 │  ├─ operating_metrics_crew.txt
 │  ├─ risk_crew.txt
-│  ├─ qa_research.txt
 │  ├─ valuation_crew.txt
 │  ├─ investment_thesis_crew.txt
 │  └─ writeup_crew.txt
@@ -134,9 +130,6 @@
    │  └─ iter_01/
    ├─ thesis/
    │  └─ iter_01/
-   ├─ qa/
-   │  └─ research/
-   │     └─ iter_01/
    ├─ registry/
    │  ├─ evidence_registry.json
    │  ├─ registry_snapshot.md
@@ -151,7 +144,8 @@
 
 - 当前正式运行主路径是 `.cache/<run_slug>/`，不是仓库根目录的 `output/`
 - `run_manifest.json` 写在 `md/` 目录
-- research、valuation、thesis 和 QA 都按 `iter_XX` 保留阶段版本
+- research、valuation、thesis 都按 `iter_XX` 保留阶段版本
+- research 内部校验摘要随 `research/iter_01/08_research_internal_registry_checks.md` 一起落盘
 - `latest_run.json` 已经移除，不再维护项目级最新索引
 
 ## 仓库目录

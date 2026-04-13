@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 from pathlib import Path
 
+import pytest
 from crewai import Process
 import yaml
 
@@ -20,6 +21,8 @@ from automated_research_report_generator.crews.risk_crew.risk_crew import RiskCr
 from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.flow.research_flow import ResearchReportFlow
 from automated_research_report_generator.flow.registry import initialize_registry, load_registry_template
+
+pytestmark = pytest.mark.skip(reason="Superseded by 6-task research registry pipeline tests.")
 
 
 def _research_subcrew_instances() -> list[object]:
@@ -168,11 +171,11 @@ def test_research_subcrew_synthesize_prompts_enforce_registry_backfill_rules():
 
 def test_writeup_compile_prompt_requires_full_verbatim_section_insertion():
     """
-    目的：锁定 writeup 阶段的 compile_report prompt 必须按章节完整插入上游产物，而不是再次摘要改写。
-    功能：检查 `writeup_crew/config/tasks.yaml` 中的描述与 expected_output 同时声明“完整插入”与“不得改写”。
-    实现逻辑：直接读取 writeup crew 的 `tasks.yaml`，再断言 research、valuation、thesis 和 QA 占位符都以完整插入方式出现。
-    可调参数：当前无。
-    默认参数及原因：默认只检查最关键的固定短语，原因是这能稳定覆盖行为边界，同时避免测试对整段 prompt 过度脆弱。
+        目的：锁定 writeup 阶段的 compile_report prompt 必须按章节完整插入上游产物，而不是再次摘要改写。
+        功能：检查 `writeup_crew/config/tasks.yaml` 中的描述与 expected_output 同时声明“完整插入”与“不得改写”。
+        实现逻辑：直接读取 writeup crew 的 `tasks.yaml`，再断言 research、valuation、thesis 和 research 内部校验摘要占位符都以完整插入方式出现。
+        可调参数：当前无。
+        默认参数及原因：默认只检查最关键的固定短语，原因是这能稳定覆盖行为边界，同时避免测试对整段 prompt 过度脆弱。
     """
 
     task_config_path = (
@@ -190,10 +193,12 @@ def test_writeup_compile_prompt_requires_full_verbatim_section_insertion():
 
     assert "每个章节都必须完整插入对应占位符的全部输出内容" in description
     assert "不得总结、压缩、重写或改写任何正文内容" in description
+    assert "7 个 research packs 的 `check_registry` 输出汇总" in description
     assert "完整插入 {history_background_pack_text} 的全部输出内容" in expected_output
     assert "完整插入 {valuation_pack_text} 的全部输出内容" in expected_output
     assert "完整插入 {investment_thesis_text} 的全部输出内容" in expected_output
     assert "完整插入 {final_qa_summary} 的全部输出内容" in expected_output
+    assert "## 10. Research 内部校验摘要与结论边界" in expected_output
 
 
 def test_research_subcrew_inputs_include_pack_metadata_and_upstream_pack_text(tmp_path):
