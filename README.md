@@ -1,10 +1,12 @@
-# Automated Research Report Generator v0.2
+# Automated Research Report Generator v0.3
 
-一个基于 CrewAI Flow 的买方研究报告生成项目。当前仓库的真实主线已经切到 `v0.2` 的 registry-centric 结构：planning 不再依赖单独的 planning crew，而是用固定 YAML 模板初始化 research registry；7 个 research sub-crews 围绕统一 registry 工作；research 完成后直接进入 valuation，并把各 pack 的 `check_registry` 输出汇总成内部校验摘要。
+一个基于 CrewAI Flow 的买方研究报告生成项目。当前工作区是从 `v0.2` 复制出来的 `v0.3` 升级工作区：代码主线仍以已经落地的 registry-centric 结构为基线，但本文档、设计说明和后续改造目标都按 `v0.3` 开发线理解。
 
 ## 当前实现边界
 
-- 当前项目版本：`0.2.0`
+- 当前开发线目标版本：`v0.3`
+- 当前 `pyproject.toml` 版本基线：`0.2.0`
+  - 说明：当前只是开始做 `v0.3` 升级，还没有把包版本正式切到 `0.3.0`
 - 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.1`
 - 当前项目类型：`[tool.crewai].type = "flow"`
 - 当前主入口：`src/automated_research_report_generator/main.py`
@@ -263,11 +265,11 @@ uv run pytest test_src/test_text_file_encoding.py -q
 - 当前续接说明：`PROJECT_HANDOFF.md`
 - 当前结构链路说明：`design_docs/项目信息传递链路全面分析.md`
 - 当前 crew 结构说明：`design_docs/CREW_REFACTOR_WORKING_DRAFT.md`
-- 近期下一步设计方向：`design_docs/next_step_20260410.md`
+- `v0.3` 下一步设计方向：`design_docs/next_step_20260410.md`
 
-## 近期设计方向
+## v0.3 近期设计方向
 
-近期已经明确但尚未完全落地的方向主要集中在 thesis 阶段：
+当前已经进入 `v0.3` 升级阶段。近期已经明确但尚未完全落地的方向主要集中在 thesis 阶段：
 
 - 提炼当前市场一致预期
 - 识别基本面与估值相对市场预期的预期差

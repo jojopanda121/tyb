@@ -3,7 +3,7 @@
 Before starting work on this repository, read `PROJECT_HANDOFF.md`.
 This repository no longer keeps `PROJECT_CONVERSATIONS/` in-tree, so do not assume the archive directory exists.
 
-# AGENTS.md - automated_research_report_generator v0.2
+# AGENTS.md - automated_research_report_generator v0.3
 
 ## 第一性原则
 
@@ -16,7 +16,8 @@ This repository no longer keeps `PROJECT_CONVERSATIONS/` in-tree, so do not assu
 
 - 当前 Python 包前缀固定为 `automated_research_report_generator`。
 - 当前主包目录固定为 `src/automated_research_report_generator/`。
-- 当前项目版本来自 `pyproject.toml`：`0.2.0`。
+- 当前工作区目标版本是 `v0.3`。
+- 当前 `pyproject.toml` 仍保留 `0.2.0` 基线，只有在正式切版或发版时再改。
 - 当前 CrewAI 依赖固定为 `crewai[file-processing,google-genai,litellm,tools]==1.14.1`。
 - 当前项目类型是 Flow 项目，`[tool.crewai].type = "flow"`。
 - 当前 GitHub 远端仓库名仍是 `automated_research_report_generator_v0.1`，不要把远端名字和本地包路径混淆。
