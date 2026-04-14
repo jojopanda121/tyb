@@ -1,9 +1,13 @@
 .env
 .venv/
 .cache/
+crewai_memory/
+.claude/
 __pycache__/
 *.py[cod]
 *.tmp
 .DS_Store
 .recycle
 logs/
+.codex_pytest_tmp_gate/
+.codex_pytest_tmp_subcrew/

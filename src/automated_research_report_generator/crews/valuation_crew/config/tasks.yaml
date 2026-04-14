@@ -1,0 +1,154 @@
+build_peer_set:
+  description: |
+    为 {company_name} 构建相对估值分析包。
+
+    输入：
+    - 同行信息分析包：
+      {peer_info_pack_text}
+    - 财务分析包：
+      {finance_pack_text}
+    - 运营指标分析包：
+      {operating_metrics_pack_text}
+    - 风险分析包：
+      {risk_pack_text}
+    - PDF 文件路径：{pdf_file_path}
+    - 页面索引文件路径：{page_index_file_path}
+
+    执行要求：
+    - 本任务不再重新选同行；同行池和同行底稿以 `peer_info_pack_text` 为准。
+    - 基于同行倍数、经营差异和风险差异形成相对估值区间。
+    - 解释为什么采用这些倍数，以及为什么需要对某些同行做折价或溢价处理。
+    - 如果可比性较弱，要明确指出，而不是强行给出过度精确的结论。
+    - 需要时可以使用 `tushare_valuation_data_tool` 和 `valuation_comparable_tool` 补充最新可比倍数。
+  expected_output: |
+    严格按以下模板输出，不增删标题；表格保留 Markdown `|` 格式。
+
+    # {company_name} 可比估值分析包
+    ## 1. 相对估值结论摘要
+    - 当前采用的核心倍数
+    - 为什么这些倍数有代表性
+
+    ## 2. 倍数与估值区间总表
+    | 方法 | 低位 | 基准 | 高位 | 采用理由 | 备注 |
+    | --- | --- | --- | --- | --- | --- |
+    | EV/Revenue |  |  |  |  |  |
+    | EV/EBITDA |  |  |  |  |  |
+    | PE |  |  |  |  |  |
+
+    ## 3. 调整逻辑
+    - 为什么需要对目标公司相对同行进行折价或溢价
+    - 经营差异、增长差异和风险差异分别怎么影响估值
+
+    ## 4. 可比性局限
+    - 可比性不足的地方
+    - 这会如何影响后续估值解读
+  agent: peer_analyst
+  output_file: "{valuation_output_dir}/01_peers_pack.md"
+
+derive_intrinsic_valuation:
+  description: |
+    为 {company_name} 构建内在价值分析包。
+
+    输入：
+    - 同行信息分析包：
+      {peer_info_pack_text}
+    - 财务分析包：
+      {finance_pack_text}
+    - 运营指标分析包：
+      {operating_metrics_pack_text}
+    - 风险分析包：
+      {risk_pack_text}
+    - PDF 文件路径：{pdf_file_path}
+    - 页面索引文件路径：{page_index_file_path}
+
+    执行要求：
+    - 当简洁的 DCF 逻辑有帮助时，使用 `valuation_model_tool`。
+    - 把核心假设写清楚，并说明哪些假设证据强，哪些证据弱。
+    - 展示内在价值最敏感的变量和主要情景变化。
+    - 如果关键假设缺乏支撑，要明确指出，并降低结论置信度。
+    - 至少输出一张估值结果表和一张敏感性分析表。
+  expected_output: |
+    严格按以下模板输出，不增删标题；表格保留 Markdown `|` 格式。
+
+    # {company_name} 内在价值分析包
+    ## 1. 估值框架与核心假设
+    - 使用了什么估值方法
+    - 关键假设是什么
+    - 关键假设来自哪里
+    - 哪些假设证据较强，哪些较弱
+
+    ## 2. 估值结果总表
+    | 估值方法 | 情景 | 核心假设 | 估值结果 | 备注 | 数据来源 |
+    | --- | --- | --- | --- | --- | --- |
+    | DCF/内在价值法 | Base |  |  |  |  |
+    | DCF/内在价值法 | Bull |  |  |  |  |
+    | DCF/内在价值法 | Bear |  |  |  |  |
+
+    ## 3. 敏感性分析表
+    | 关键变量 | 变动方向/幅度 | 对估值的影响 | 备注 | 数据来源 |
+    | --- | --- | --- | --- | --- |
+    | 收入增速 |  |  |  |  |
+    | 利润率/现金流率 |  |  |  |  |
+    | 折现率/WACC |  |  |  |  |
+    | 永续增长率/终值假设 |  |  |  |  |
+
+    ## 4. 关键结论与置信度说明
+    - 内在价值区间
+    - 对哪些变量最敏感
+    - 哪些关键假设缺乏支撑
+    - 为什么需要收窄或下调置信度
+  agent: cashflow_analyst
+  output_file: "{valuation_output_dir}/02_intrinsic_value_pack.md"
+
+summarize_valuation:
+  description: |
+    为 {company_name} 构建最终估值分析包。
+
+    输入：
+    - 同行信息分析包：
+      {peer_info_pack_text}
+    - 财务分析包：
+      {finance_pack_text}
+    - 运营指标分析包：
+      {operating_metrics_pack_text}
+    - 风险分析包：
+      {risk_pack_text}
+    - PDF 文件路径：{pdf_file_path}
+    - 页面索引文件路径：{page_index_file_path}
+
+    执行要求：
+    - 协调可比估值与内在价值估值之间的关系，说明权重逻辑。
+    - 把估值区间转换成上行、下行和预期回报框架。
+    - 必须调用 `valuation_football_field_tool` 生成 football field，并把返回的 SVG/HTML 原样嵌入结果。
+    - football field 中每条估值带要与估值汇总表中的方法和区间保持一致。
+    - 输出要先给出文字结论，再给估值汇总表。
+  expected_output: |
+    严格按以下模板输出，不增删标题；表格保留 Markdown `|` 格式；Football Field 直接插入 `valuation_football_field_tool` 返回的原始 SVG/HTML。
+
+    # {company_name} 估值分析包
+    ## 1. 估值结论摘要
+    - 文字版估值结论
+    - 可比估值与内在价值估值的关系
+    - 为什么某种方法权重更高或更低
+
+    ## 2. 估值汇总表
+    | 估值方法 | 低位 | 基准 | 高位 | 权重/采纳度 | 备注 | 数据来源 |
+    | --- | --- | --- | --- | --- | --- | --- |
+    | 可比估值 |  |  |  |  |  |  |
+    | 内在价值估值 |  |  |  |  |  |  |
+    | 综合估值结论 |  |  |  |  |  |  |
+
+    ## 3. Football Field
+    直接插入 `valuation_football_field_tool` 返回的原始 SVG/HTML。
+
+    ## 4. 上行、下行与预期回报框架
+    - 上行情景
+    - 下行情景
+    - 预期回报框架
+
+    ## 5. 方法权重与采纳说明
+    - 各方法为何被采纳或弱化
+    - 估值区间为何这样协同
+    - 最关键的不确定性
+  agent: valuation_analyst
+  output_file: "{valuation_output_dir}/03_valuation_pack.md"

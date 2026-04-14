@@ -1,13 +1,13 @@
-# Pinned from the current project environment and uv.lock.
-# Install with: pip install -r requirements.txt
-# The order is kept stable for readability; modern pip resolves the graph safely.
+# Convenience requirements file for users who prefer pip.
+# The source of truth remains pyproject.toml + uv.lock.
 
-litellm==1.82.6
-crewai[file-processing,google-genai,litellm,tools]==1.12.2
-python-dotenv==1.1.1
-pydantic==2.11.10
-PyYAML==6.0.3
-PyMuPDF==1.26.7
 beautifulsoup4==4.13.5
+crewai[file-processing,google-genai,litellm,tools]==1.14.0
+litellm==1.82.6
 markdown==3.10.2
+pydantic==2.11.10
+PyMuPDF==1.26.7
+python-dotenv==1.1.1
+PyYAML==6.0.3
+tushare==1.4.29
 weasyprint==68.1

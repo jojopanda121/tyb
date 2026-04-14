@@ -1,0 +1,101 @@
+synthesize_investment_case:
+  description: |
+    综合各分析包，为 {company_name} 形成投资逻辑。
+
+    输入：
+    - 历史与背景分析包：
+      {history_background_pack_text}
+    - 行业分析包：
+      {industry_pack_text}
+    - 业务分析包：
+      {business_pack_text}
+    - 同行信息分析包：
+      {peer_info_pack_text}
+    - 财务分析包：
+      {finance_pack_text}
+    - 运营指标分析包：
+      {operating_metrics_pack_text}
+    - 风险分析包：
+      {risk_pack_text}
+    - 可比公司分析包：
+      {peers_pack_text}
+    - 估值分析包：
+      {valuation_pack_text}
+    - 完整注册表快照：
+      {registry_full_text}
+    - PDF 文件路径：{pdf_file_path}
+    - 页面索引文件路径：{page_index_file_path}
+
+    执行要求：
+    - 如需读取 registry，只使用 `read_registry` 工具，先看完整账本，再按需钻取 judgment 和 evidence 详情。
+    - 明确说明这只股票为什么可能成立，以及为什么可能失败。
+    - 把关键假设、催化因素、失效点和估值承接关系写清楚。
+    - 把投资逻辑与注册表里已有证据支持的问题重新对齐。
+    - 不要写成宣传稿，也不得只讲看多逻辑。
+  expected_output: |
+    严格按以下模板输出，不增删标题。
+
+    # {company_name} 投资逻辑
+    ## 1. 一句话结论
+    - 用一句话概括最核心的投资判断
+
+    ## 2. 正面因素/看多逻辑
+    - 逻辑 1
+    - 逻辑 2
+    - 逻辑 3
+
+    ## 3. 负面因素/看跌逻辑
+    - 风险 1
+    - 风险 2
+    - 风险 3
+
+    ## 4. 关键假设
+    | 假设 | 为什么重要 | 当前证据强度 | 如不成立会影响什么 |
+    | --- | --- | --- | --- |
+    | 假设 1 |  |  |  |
+    | 假设 2 |  |  |  |
+    | 假设 3 |  |  |  |
+    | …… |  |  |  |
+
+    ## 5. 催化因素/失效点
+    | 催化因素 | 失效点 |
+    | --- | --- | 
+    | 假设 1 |  | 
+    | 假设 2 |  | 
+    | 假设 3 |  | 
+    | …… |  | 
+  agent: investment_synthesizer
+  output_file: "{thesis_output_dir}/01_investment_thesis.md"
+
+draft_diligence_questions:
+  description: |
+    为 {company_name} 生成面向管理层和尽调环节的高优先级问题清单。
+
+    输入：
+    - 完整注册表快照：
+      {registry_full_text}
+    - PDF 文件路径：{pdf_file_path}
+    - 页面索引文件路径：{page_index_file_path}
+    - 投资逻辑：
+      使用 `synthesize_investment_case` 的输出作为次级上下文
+
+    执行要求：
+    - 必须先使用 `read_registry` 工具读取完整账本。
+    - 优先处理状态不是 `checked` 的 judgment。
+    - 其中 `need_revision` judgment 应视为最高优先级管理层问题。
+    - 只有在完成注册表审阅后，才使用投资逻辑优化分组、措辞和排序。
+    - 本任务只读取 registry，不新增、修改或关闭 judgment。
+    - 问题必须聚焦会实质改变投资判断的不确定性，不得泛泛而谈。
+  expected_output: |
+    严格按以下模板输出，不增删标题。
+
+    # {company_name} 尽调问题包
+    ## 1. 问题清单
+    | 问题 | 对应风险/假设/冲突 | 提问注意事项 |
+    | --- | --- | --- | 
+    | 问题 1 |  |  | 
+    | 问题 2 |  |  | 
+    | 问题 3 |  |  | 
+
+  agent: diligence_question_designer
+  output_file: "{thesis_output_dir}/02_diligence_questions.md"

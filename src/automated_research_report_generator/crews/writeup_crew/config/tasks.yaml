@@ -1,0 +1,31 @@
+compile_report:
+  description: >
+    Flow 已经为 {company_name} 在 {final_report_markdown_path} 预先生成最终版 v2 Markdown 研究报告。
+
+    说明：
+    - 正文已经由 flow 以确定性方式完成拼装，覆盖 thesis、7 个 research packs、peers pack、intrinsic value pack、valuation pack、Research 内部校验摘要。
+    - 报告末尾已按附录方式纳入 registry snapshot，预期路径为：{registry_snapshot_markdown_path}
+
+    执行要求：
+    - 不要重新生成 Markdown 正文。
+    - 不要覆盖或改写 {final_report_markdown_path}。
+    - 不得总结、压缩、重写或修补任何上游正文内容。
+    - 只做非破坏性确认，确认该 Markdown 已准备好交给 PDF 导出任务。
+    - 如果你发现路径为空或描述不完整，只在回答里明确指出，不做内容修复。
+  expected_output: |
+    Markdown 已确认就绪，可直接导出 PDF。
+  agent: report_editor
+
+export_final_report:
+  description: >
+    将为 {company_name} 已由 flow 预生成的 Markdown 报告转换成 PDF。
+
+    执行要求：
+    - 调用 markdown_to_pdf，并使用 markdown_path={final_report_markdown_path}
+    - 使用 pdf_path={final_report_pdf_path}
+    - 使用 title={company_name} 买方研究报告
+    - 不要修改 Markdown 正文
+    - 只做导出，不做内容改写
+  expected_output: |
+    PDF 已成功导出到：{final_report_pdf_path}
+  agent: report_editor

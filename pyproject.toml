@@ -1,29 +1,28 @@
 [project]
-name = "automated_research_report_generator_v0.1"
-version = "0.1.0"
-description = "automated_research_report_generator_v0.1 using crewAI"
-authors = [
-    { name = "Your Name", email = "you@example.com" },
-]
+name = "automated_research_report_generator"
+version = "0.2.0"
+description = "CrewAI Flow-based buy-side research report generator with evidence registry, QA gates, HITL, and split runtime logs"
+readme = "README.md"
 requires-python = ">=3.10,<3.14"
 dependencies = [
     "beautifulsoup4>=4.13.5",
-    "crewai[file-processing,google-genai,litellm,tools]>=1.12.2",
+    "crewai[file-processing,google-genai,litellm,tools]==1.14.1",
     "pydantic>=2.11.10",
     "PyMuPDF>=1.26.7",
     "python-dotenv>=1.1.1",
     "PyYAML>=6.0.3",
     "markdown>=3.10.2",
     "weasyprint>=68.1",
+    "tushare>=1.4.29",
 ]
 
 [project.scripts]
-automated_research_report_generator_v0_1 = "automated_research_report_generator_v0_1.main:run"
-run_crew = "automated_research_report_generator_v0_1.main:run"
-train = "automated_research_report_generator_v0_1.main:train"
-replay = "automated_research_report_generator_v0_1.main:replay"
-test = "automated_research_report_generator_v0_1.main:test"
-run_with_trigger = "automated_research_report_generator_v0_1.main:run_with_trigger"
+kickoff = "automated_research_report_generator.main:kickoff"
+plot = "automated_research_report_generator.main:plot"
+automated_research_report_generator = "automated_research_report_generator.main:run"
+run_flow = "automated_research_report_generator.main:run"
+plot_flow = "automated_research_report_generator.main:plot"
+run_crew = "automated_research_report_generator.main:run"
 
 [build-system]
 requires = [
@@ -32,7 +31,12 @@ requires = [
 build-backend = "hatchling.build"
 
 [tool.crewai]
-type = "crew"
+type = "flow"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/automated_research_report_generator",
+]
 
 [tool.uv]
 override-dependencies = [

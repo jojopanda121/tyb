@@ -1,0 +1,191 @@
+extract_file_facts:
+  extract_guidance: 重点从 PDF 中提取管理层自认的可比对象、竞争对手、业务相似度线索和已有的 peer 对比数据。
+  description: |-
+    围绕 {company_name} 的 {pack_title} 执行 PDF 候选采集任务。
+
+    输入：
+    - PDF 文件路径：{pdf_file_path}
+    - 页面索引文件路径：{page_index_file_path}
+    - 当前专题焦点：{pack_focus}
+    - 返工反馈：{qa_feedback}
+    - 上游行业分析包：{industry_pack_text}
+    - 上游业务分析包：{business_pack_text}
+
+    执行要求：
+    - 先读取页码索引，再有选择地读取相关页面，不要通读全文。
+    - {extract_guidance}
+    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目清单，优先关注 `unchecked / need_revision` 的 `high / medium` 条目。
+    - 只处理当前 crew 负责的条目和与之直接相关的新发现，不要越权补写其他 pack。
+    - 如果 `qa_feedback` 非空，优先回应其中属于文件提取、原文核对和页码补证的缺口；被标成 `need_revision` 的条目要结合 `revision_detail` 输出定向修订建议。
+    - 你的职责是生成“候选 patch 报告”，而不是直接调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update`。
+    - 对每个候选更新，优先匹配已有 `entry_id`，明确写出拟更新字段、原文摘录、页码或章节位置、时间口径和置信度；只有确认现有条目没有语义匹配槽位时，才把它列入 `new_entry_candidates`。
+    - 如果 PDF 原文与外部资料或现有判断冲突，必须写清冲突来源、冲突点和当前判断，不能静默忽略。
+    - 如果在 PDF 中无法提取到可靠信息，明确写“未提取到信息”，并把缺口归入 `unresolved_gaps`。
+    - 任务结束时只输出供 `record_extract_registry` 落账的候选 patch 报告，不直接写 registry。
+  expected_output: |-
+    面向 manager 和后续 record task 的候选 patch 报告，必须严格包含以下三段：
+    1. `existing_entry_updates`：逐条列出建议 amend 的 `entry_id`、拟更新字段、建议值、来源摘要、时间口径、置信度，以及是否涉及冲突。
+    2. `new_entry_candidates`：仅列出确认没有现有语义匹配槽位的新增候选，写明建议 `entry_type`、标题、核心内容、来源摘要和为什么不能并入旧条目。
+    3. `unresolved_gaps`：列出仍未解决的缺口、缺失原因、建议下一步走 `extract` 还是 `search`，以及是否影响后续综合输出。
+  agent: extract_file_fact_agent
+record_extract_registry:
+  description: |-
+    基于 `extract_file_facts` 的候选 patch 报告，执行 extract 结果的 registry 落账与修订任务。
+
+    输入：
+    - 当前责任 crew：{owner_crew}
+    - 当前专题焦点：{pack_focus}
+    - 返工反馈：{qa_feedback}
+    - 上游上下文：`extract_file_facts` 的候选 patch 报告
+
+    执行要求：
+    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的现有条目和需要返工的 `entry_id`。
+    - 只负责把上游已整理好的候选 patch 写回 registry，不再重新发散搜索，也不重新通读 PDF。
+    - 对 `existing_entry_updates` 中的候选，优先使用 `update_entry` amend 既有 `entry_id`；必要时补齐 `unit`、`period`、`source`、`confidence`。
+    - 对 `content_type="table"` 的条目，按 `columns` 完整更新表格行，不要只补半行字段。
+    - 只有确认现有条目不存在语义匹配槽位时，才允许使用 `add_entry` 新建条目。
+    - 调用 `add_entry` 或 `update_entry` 时，`topic` 只能填写规范英文 token：`history / industry / business / peer_info / financial / operating_metrics / risk`；不要填写中文包名、`{pack_title}`、`xx分析包` 或 `xx研究包`。
+    - 对新增或实质更新后的结论，必须补 `add_evidence`；必要时用 `status_update` 写清 `revision_detail`。
+    - 如果 `qa_feedback` 非空，优先关闭其中属于 PDF 提取与原文核对的缺口；无法关闭的条目要明确保留为 `need_revision`。
+    - 任务结束前必须调用 `registry_review` 留痕，说明本轮 amend 了哪些条目、是否新建条目，以及哪些缺口仍未关闭。
+  expected_output: |-
+    面向 manager 的落账结果摘要：
+    - 已 amend 的 `entry_id` 列表与关键更新字段
+    - 已新建的 `entry_id` 列表与新增原因
+    - 仍未关闭的缺口与原因
+    - 建议下一步交回 `extract`、`search` 还是直接进入 `qa` 的事项
+  agent: extract_file_fact_agent
+search_facts:
+  crew_name: peer_info_crew
+  pack_name: peer_info_pack
+  pack_title: 同行信息分析包
+  pack_focus: 围绕可比公司筛选标准、样本清单、经营与财务可比性、估值倍数对比和可比性限制完成同行专题研究。
+  output_title: 同行信息分析包
+  search_guidance: 重点筛选同行名单并补齐主营构成差异、地域差异、规模差异和上市状态；搜集 peer 的收入、利润率和估值倍数。
+  description: |-
+    围绕 {company_name} 的 {pack_title} 执行外部搜索候选采集任务。
+
+    输入：
+    - 行业：{industry}
+    - 当前责任 crew：{owner_crew}
+    - 当前专题焦点：{pack_focus}
+    - 返工反馈：{qa_feedback}
+    - 上游行业分析包：{industry_pack_text}
+    - 上游业务分析包：{business_pack_text}
+
+    执行要求：
+    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目清单，优先关注 `unchecked / need_revision` 的 `high / medium` 条目。
+    - 只有在已经通过 `read_registry` 拿到具体 `entry_id` 后，才允许继续用 `view="entry_detail"` 下钻；禁止在 `entry_id` 为空时直接调用该视图。
+    - 只处理当前 crew 负责的条目和与之直接相关的新发现，不要越权补写其他 pack。
+    - {search_guidance}
+    - 如果 `qa_feedback` 非空，优先回应其中属于外部搜索补证的缺口；被标成 `need_revision` 的条目要结合 `revision_detail` 输出定向修订建议。
+    - 你的职责是生成“候选 patch 报告”，而不是直接调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update`。
+    - 对每个候选更新，优先匹配已有 `entry_id`，明确写出拟更新字段、来源摘要、时间口径和置信度；只有确认现有条目没有语义匹配槽位时，才把它列入 `new_entry_candidates`。
+    - 如果外部资料彼此冲突，必须写清冲突来源、冲突点和当前判断，不能静默忽略。
+    - 如果没有搜到可靠资料，明确写“未搜索到信息”，并把缺口归入 `unresolved_gaps`。
+    - 任务结束时只输出供 `record_search_registry` 落账的候选 patch 报告，不直接写 registry。
+  expected_output: |-
+    面向 manager 和后续 record task 的候选 patch 报告，必须严格包含以下三段：
+    1. `existing_entry_updates`：逐条列出建议 amend 的 `entry_id`、拟更新字段、建议值、来源摘要、时间口径、置信度，以及是否涉及冲突。
+    2. `new_entry_candidates`：仅列出确认没有现有语义匹配槽位的新增候选，写明建议 `entry_type`、标题、核心内容、来源摘要和为什么不能并入旧条目。
+    3. `unresolved_gaps`：列出仍未解决的缺口、缺失原因、建议下一步走 `extract` 还是 `search`，以及是否影响后续综合输出。
+  agent: search_fact_agent
+record_search_registry:
+  description: |-
+    基于 `search_facts` 的候选 patch 报告，执行 search 结果的 registry 落账与修订任务。
+
+    输入：
+    - 当前责任 crew：{owner_crew}
+    - 当前专题焦点：{pack_focus}
+    - 返工反馈：{qa_feedback}
+    - 上游上下文：`search_facts` 的候选 patch 报告
+
+    执行要求：
+    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的现有条目和需要返工的 `entry_id`。
+    - 只负责把上游已整理好的候选 patch 写回 registry，不再重新发散搜索。
+    - 对 `existing_entry_updates` 中的候选，优先使用 `update_entry` amend 既有 `entry_id`；必要时补齐 `unit`、`period`、`source`、`confidence`。
+    - 对 `content_type="table"` 的条目，按 `columns` 完整更新表格行，不要只补半行字段。
+    - 只有确认现有条目不存在语义匹配槽位时，才允许使用 `add_entry` 新建条目。
+    - 调用 `add_entry` 或 `update_entry` 时，`topic` 只能填写规范英文 token：`history / industry / business / peer_info / financial / operating_metrics / risk`；不要填写中文包名、`{pack_title}`、`xx分析包` 或 `xx研究包`。
+    - 对新增或实质更新后的结论，必须补 `add_evidence`；必要时用 `status_update` 写清 `revision_detail`。
+    - 如果 `qa_feedback` 非空，优先关闭其中属于外部搜索补证的缺口；无法关闭的条目要明确保留为 `need_revision`。
+    - 任务结束前必须调用 `registry_review` 留痕，说明本轮 amend 了哪些条目、是否新建条目，以及哪些缺口仍未关闭。
+  expected_output: |-
+    面向 manager 的落账结果摘要：
+    - 已 amend 的 `entry_id` 列表与关键更新字段
+    - 已新建的 `entry_id` 列表与新增原因
+    - 仍未关闭的缺口与原因
+    - 建议下一步交回 `extract`、`search` 还是直接进入 `qa` 的事项
+  agent: search_fact_agent
+check_registry:
+  qa_guidance: 确认同行名单是否有明确的纳入/排除标准、关键 peer 指标是否口径一致、估值倍数是否已形成可复用底稿。
+  description: |-
+    检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
+
+    执行要求：
+    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目，并重点审查 `record_extract_registry` 与 `record_search_registry` 刚完成 amend 的结果。
+    - {qa_guidance}
+    - 找出仍是 `unchecked / need_revision` 的关键条目，尤其是 `high / medium` 优先级。
+    - 如果发现遗漏，使用 `status_update` 补充更具体的 `revision_detail`，并在 `registry_review` 里写明建议回退给 `extract` 还是 `search`。
+    - 你不负责新增正文内容；你只负责检查、标记和留痕。
+    - 任务结束前必须调用 `registry_review` 留痕。
+  expected_output: |-
+    严格输出 JSON 对象，包含以下字段：
+    - pack_name: 当前分析包名称（字符串）
+    - overall_status: "ready" 或 "not_ready"
+    - issues: 未通过条目列表，每项包含 entry_id、issue_type（枚举：missing_content / need_revision / source_conflict / incomplete_table）、detail
+    - revision_suggestions: 修订建议列表（字符串数组）
+    - recommended_rework_stage: "extract"、"search" 或 "none"
+    - summary: 一段话总结检查结论
+    ready 时 issues 应为空、recommended_rework_stage 应为 "none"。
+  agent: qa_check_agent
+synthesize_and_output:
+  synthesize_guidance: 输出要明确纳入与排除逻辑、peer 核心财务与运营指标对比、估值倍数区间和可比性限制对估值结论的影响。
+  output_skeleton: |
+    严格按下列格式形成一份结构化文本，严格使用下列标题作为标题，不得遗漏以下任何一个标题，不要增加任何标题和分节。必要时可以补充表格辅助阅读。
+    每节要求写明：内容 / 来源 / 待确认事项。
+
+    # {company_name} 同行信息分析
+    ## 1. 可比公司筛选标准与样本清单
+    - 1.1 筛选维度（主营构成、地域、规模、上市状态）
+    - 1.2 纳入的可比公司清单及纳入理由
+    - 1.3 排除的候选公司及排除理由
+    ## 2. 经营与产品可比性
+    - 2.1 各 peer 的主营业务构成与 {company_name} 的相似度
+    - 2.2 产品/服务重叠度与差异点
+    - 2.3 地域覆盖与客户群体对比
+    ## 3. 财务与运营指标对比
+    - 3.1 收入规模与增速对比（需明确口径和报告期）
+    - 3.2 利润率对比（毛利率、净利率、EBITDA 利润率）
+    - 3.3 关键运营指标对比（如适用）
+    ## 4. 估值倍数对比
+    - 4.1 P/E、P/S、EV/EBITDA 等估值倍数
+    - 4.2 估值倍数的中位数与区间
+    - 4.3 估值数据来源与时点
+    ## 5. 可比性限制与使用边界
+    - 5.1 样本局限性（数量、质量、口径差异）
+    - 5.2 对估值结论的影响与使用建议
+    - 5.3 仍待补充的 peer 信息
+  description: |-
+    基于 registry 中 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
+
+    输入：
+    - 行业：{industry}
+    - 输出路径：{pack_output_path}
+    - 当前专题焦点：{pack_focus}
+    - 上游行业分析包：{industry_pack_text}
+    - 上游业务分析包：{business_pack_text}
+
+    执行要求：
+    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的全部条目；只有在已经通过 `read_registry` 拿到具体 `entry_id` 后，才允许继续用 `view="entry_detail"` 下钻关键条目。
+    - 只综合当前 crew 负责的事实、数据、judgment 和相关证据，不得越权引用其他 pack 的未沉淀内容。
+    - 本任务是严格只读综合：不得调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update` 修改 entry 内容、状态或证据。
+    - 如果 `high / medium` 条目仍是 `unchecked / need_revision`，必须在正文和 `registry_review` 里显式写出缺口、影响和建议补证方向，不能偷偷补写 registry。
+    - 明确区分：已被证据支持、存在冲突、仍未解决。
+    - 如果存在冲突，要写明冲突点和严重程度，不要静默忽略。
+    - {synthesize_guidance}
+    - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否仍有残余缺口。
+  expected_output: |
+    {output_skeleton}
+  agent: synthesizing_agent
+  output_file: '{pack_output_path}'
