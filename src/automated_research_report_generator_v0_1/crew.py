@@ -7,6 +7,9 @@ from crewai_tools import SerperDevTool
 from automated_research_report_generator_v0_1.tools.MarkdownToPdfTool import (
     MarkdownToPdfTool,
 )
+from automated_research_report_generator_v0_1.tools.investment_snapshot_ppt_a4 import (
+    InvestmentSnapshotPptTool,
+)
 from automated_research_report_generator_v0_1.tools.pdf_page_tools import (
     ReadPdfPageIndexTool,
     ReadPdfPagesTool,
@@ -353,6 +356,52 @@ class AutomatedResearchReportGeneratorV01Crew:  # 设计：集中装配研究报
         )
 
     @agent
+    def pitch_material_writer(self) -> Agent:  # 目的：定义推介材料 agent；功能：把既有分析压缩成高信息密度推介文案；实现逻辑：仅基于上下文重组表达不额外取数；可调参数：temperature、max_iter；默认参数及原因：0.6 与 25，兼顾文案表现力和稳定性。
+        return Agent(
+            config=self.agents_config["pitch_material_writer"],  # type: ignore[index]
+            tools=[],
+            llm=get_llm(temperature=0.6),
+            function_calling_llm=None,
+            max_iter=25,
+            max_rpm=None,
+            max_execution_time=None,
+            verbose=True,
+            allow_delegation=False,
+            step_callback=None,
+            cache=True,
+            allow_code_execution=False,
+            max_retry_limit=2,
+            respect_context_window=True,
+            use_system_prompt=True,
+            reasoning=False,
+            max_reasoning_attempts=None,
+            inject_date=True,
+        )
+
+    @agent
+    def investment_snapshot_slide_writer(self) -> Agent:  # 目的：定义单页投委会 PPT agent；功能：把现有分析压缩为单页快照并调用 PPT 工具导出；实现逻辑：仅消费 context，不重新读 PDF 或搜索；可调参数：temperature、max_iter；默认参数及原因：0.2 与 20，强调结构稳定和工具调用准确。
+        return Agent(
+            config=self.agents_config["investment_snapshot_slide_writer"],  # type: ignore[index]
+            tools=[InvestmentSnapshotPptTool(result_as_answer=True)],
+            llm=get_llm(temperature=0.2, timeout=60),
+            function_calling_llm=None,
+            max_iter=20,
+            max_rpm=None,
+            max_execution_time=None,
+            verbose=True,
+            allow_delegation=False,
+            step_callback=None,
+            cache=True,
+            allow_code_execution=False,
+            max_retry_limit=2,
+            respect_context_window=True,
+            use_system_prompt=True,
+            reasoning=False,
+            max_reasoning_attempts=None,
+            inject_date=True,
+        )
+
+    @agent
     def qa_consistency_analyst(self) -> Agent:  # 设计：最终质检；功能：检查一致性与遗漏；默认中温度以保留纠错敏感度。
         return Agent(
             config=self.agents_config["qa_consistency_analyst"],  # type: ignore[index]
@@ -559,10 +608,36 @@ class AutomatedResearchReportGeneratorV01Crew:  # 设计：集中装配研究报
         )
 
     @task
+    def create_pitch_material(self) -> Task:  # 目的：定义推介材料任务；功能：基于研究结论生成可传播 Markdown；实现逻辑：复用与 compile_research_report 相同 context；可调参数：cache、markdown；默认参数及原因：开启缓存并输出 markdown，便于复跑与直接交付。
+        return Task(
+            config=self.tasks_config["create_pitch_material"],  # type: ignore[index]
+            tools=[],
+            async_execution=False,
+            output_json=None,
+            output_pydantic=None,
+            human_input=False,
+            cache=True,
+            markdown=True,
+        )
+
+    @task
     def convert_research_report_md_to_pdf(self) -> Task:  # 设计：收口任务；功能：把 Markdown 报告转成 PDF；默认关闭 markdown 因为结果是文件产物。
         return Task(
             config=self.tasks_config["convert_research_report_md_to_pdf"],  # type: ignore[index]
             tools=[MarkdownToPdfTool(result_as_answer=True)],
+            async_execution=False,
+            output_json=None,
+            output_pydantic=None,
+            human_input=False,
+            cache=True,
+            markdown=False,
+        )
+
+    @task
+    def create_investment_snapshot_ppt(self) -> Task:  # 目的：定义单页投资快照 PPT 任务；功能：基于现有分析结果生成独立的单页 .pptx；实现逻辑：由 agent 先压缩内容再调用专用工具导出文件；可调参数：cache、markdown；默认参数及原因：开启缓存且关闭 markdown，因为产物核心是 PPT 文件而非长文本。
+        return Task(
+            config=self.tasks_config["create_investment_snapshot_ppt"],  # type: ignore[index]
+            tools=[],
             async_execution=False,
             output_json=None,
             output_pydantic=None,
